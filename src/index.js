@@ -7,24 +7,26 @@ const {
 } = require("discord.js");
 
 const setupLogsCommand = require("./commands/setupLogs");
+
 const messageDelete = require("./events/messageDelete");
 const messageUpdate = require("./events/messageUpdate");
+
 const guildMemberAdd = require("./events/guildMemberAdd");
 const guildMemberRemove = require("./events/guildMemberRemove");
+const guildMemberUpdate = require("./events/guildMemberUpdate");
+
 const guildBanAdd = require("./events/guildBanAdd");
 const guildBanRemove = require("./events/guildBanRemove");
-const guildMemberUpdate = require("./events/guildMemberUpdate");
+
 const channelCreate = require("./events/channelCreate");
 const channelDelete = require("./events/channelDelete");
 const channelUpdate = require("./events/channelUpdate");
-const voiceStateUpdate = require("./events/voiceStateUpdate");
+
 const roleCreate = require("./events/roleCreate");
 const roleDelete = require("./events/roleDelete");
 const roleUpdate = require("./events/roleUpdate");
 
-
-
-
+const voiceStateUpdate = require("./events/voiceStateUpdate");
 
 
 const client = new Client({
@@ -37,12 +39,18 @@ const client = new Client({
     ],
 });
 
+
 client.commands = new Collection();
 
 client.commands.set(
     setupLogsCommand.data.name,
     setupLogsCommand
 );
+
+
+// ================================
+// MESSAGE LOGS
+// ================================
 
 client.on("messageDelete", async (message) => {
     try {
@@ -52,6 +60,7 @@ client.on("messageDelete", async (message) => {
     }
 });
 
+
 client.on("messageUpdate", async (oldMessage, newMessage) => {
     try {
         await messageUpdate.execute(oldMessage, newMessage);
@@ -59,6 +68,11 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
         console.error("❌ Message Update Logger Error:", error);
     }
 });
+
+
+// ================================
+// MEMBER LOGS
+// ================================
 
 client.on("guildMemberAdd", async (member) => {
     try {
@@ -68,6 +82,7 @@ client.on("guildMemberAdd", async (member) => {
     }
 });
 
+
 client.on("guildMemberRemove", async (member) => {
     try {
         await guildMemberRemove.execute(member);
@@ -75,6 +90,20 @@ client.on("guildMemberRemove", async (member) => {
         console.error("❌ Member Leave Logger Error:", error);
     }
 });
+
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+    try {
+        await guildMemberUpdate.execute(oldMember, newMember);
+    } catch (error) {
+        console.error("❌ Member Update Logger Error:", error);
+    }
+});
+
+
+// ================================
+// BAN / UNBAN LOGS
+// ================================
 
 client.on("guildBanAdd", async (ban) => {
     try {
@@ -84,6 +113,7 @@ client.on("guildBanAdd", async (ban) => {
     }
 });
 
+
 client.on("guildBanRemove", async (ban) => {
     try {
         await guildBanRemove.execute(ban);
@@ -92,13 +122,10 @@ client.on("guildBanRemove", async (ban) => {
     }
 });
 
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-    try {
-        await guildMemberUpdate.execute(oldMember, newMember);
-    } catch (error) {
-        console.error("❌ Member Update Logger Error:", error);
-    }
-});
+
+// ================================
+// CHANNEL LOGS
+// ================================
 
 client.on("channelCreate", async (channel) => {
     try {
@@ -108,6 +135,7 @@ client.on("channelCreate", async (channel) => {
     }
 });
 
+
 client.on("channelDelete", async (channel) => {
     try {
         await channelDelete.execute(channel);
@@ -115,6 +143,7 @@ client.on("channelDelete", async (channel) => {
         console.error("❌ Channel Delete Logger Error:", error);
     }
 });
+
 
 client.on("channelUpdate", async (oldChannel, newChannel) => {
     try {
@@ -124,13 +153,10 @@ client.on("channelUpdate", async (oldChannel, newChannel) => {
     }
 });
 
-client.on("voiceStateUpdate", async (oldState, newState) => {
-    try {
-        await voiceStateUpdate.execute(oldState, newState);
-    } catch (error) {
-        console.error("❌ Voice Logger Error:", error);
-    }
-});
+
+// ================================
+// ROLE LOGS
+// ================================
 
 client.on("roleCreate", async (role) => {
     try {
@@ -140,6 +166,7 @@ client.on("roleCreate", async (role) => {
     }
 });
 
+
 client.on("roleDelete", async (role) => {
     try {
         await roleDelete.execute(role);
@@ -147,6 +174,7 @@ client.on("roleDelete", async (role) => {
         console.error("❌ Role Delete Logger Error:", error);
     }
 });
+
 
 client.on("roleUpdate", async (oldRole, newRole) => {
     try {
@@ -156,45 +184,27 @@ client.on("roleUpdate", async (oldRole, newRole) => {
     }
 });
 
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-    try {
-        await guildMemberUpdate.execute(oldMember, newMember);
-    } catch (error) {
-        console.error("❌ Member Update Logger Error:", error);
-    }
-});
 
-client.on("guildMemberAdd", async (member) => {
-    try {
-        await guildMemberAdd.execute(member);
-    } catch (error) {
-        console.error(
-            "❌ Member Join Logger Error:",
-            error
-        );
-    }
-});
+// ================================
+// VOICE LOGS
+// ================================
 
-client.on("guildMemberRemove", async (member) => {
+client.on("voiceStateUpdate", async (oldState, newState) => {
     try {
-        await guildMemberRemove.execute(member);
+        await voiceStateUpdate.execute(oldState, newState);
     } catch (error) {
-        console.error(
-            "❌ Member Leave Logger Error:",
-            error
-        );
+        console.error("❌ Voice Logger Error:", error);
     }
 });
 
 
-
-
-
+// ================================
+// BOT READY
+// ================================
 
 client.once("ready", async () => {
     console.log(`✅ ${client.user.tag} is online!`);
 
-    // Register commands in all servers where the bot is installed
     for (const guild of client.guilds.cache.values()) {
         try {
             await guild.commands.set(
@@ -203,7 +213,10 @@ client.once("ready", async () => {
                 )
             );
 
-            console.log(`✅ Commands registered in: ${guild.name}`);
+            console.log(
+                `✅ Commands registered in: ${guild.name}`
+            );
+
         } catch (error) {
             console.error(
                 `❌ Failed to register commands in ${guild.name}:`,
@@ -213,30 +226,53 @@ client.once("ready", async () => {
     }
 });
 
+
+// ================================
+// SLASH COMMANDS
+// ================================
+
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
-    const command = client.commands.get(interaction.commandName);
+    const command = client.commands.get(
+        interaction.commandName
+    );
 
     if (!command) return;
 
     try {
         await command.execute(interaction);
-    } catch (error) {
-        console.error(error);
 
-        if (interaction.replied || interaction.deferred) {
-            await interaction.editReply(
-                "❌ An error occurred while executing this command."
+    } catch (error) {
+        console.error(
+            "❌ Command Execution Error:",
+            error
+        );
+
+        try {
+            if (interaction.replied || interaction.deferred) {
+                await interaction.editReply(
+                    "❌ An error occurred while executing this command."
+                );
+            } else {
+                await interaction.reply({
+                    content:
+                        "❌ An error occurred while executing this command.",
+                    ephemeral: true,
+                });
+            }
+        } catch (replyError) {
+            console.error(
+                "❌ Interaction Reply Error:",
+                replyError
             );
-        } else {
-            await interaction.reply({
-                content: "❌ An error occurred while executing this command.",
-                ephemeral: true,
-            });
         }
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
 
+// ================================
+// LOGIN
+// ================================
+
+client.login(process.env.DISCORD_TOKEN);
