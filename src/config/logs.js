@@ -10,8 +10,6 @@ module.exports = {
         editedMessages: "edited-msg-logs",
         voice: "vc-logs",
         channels: "channel-logs",
-        tickets: "ticket-logs",
-        transcripts: "transcript-logs",
         members: "members-log",
     },
 };
