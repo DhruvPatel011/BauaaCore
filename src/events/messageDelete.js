@@ -9,12 +9,9 @@ module.exports = {
 
         // Ignore DMs
         if (!message.guild) {
-            console.log("⏭️ Ignored DM");
+            console.log("⏭️ Ignored DM message");
             return;
         }
-
-        console.log(`👤 User: ${message.author.tag}`);
-        console.log(`📍 Channel: ${message.channel.name}`);
 
         const logChannel = message.guild.channels.cache.find(
             channel => channel.name === "deleted-msg-logs"
@@ -25,7 +22,9 @@ module.exports = {
             return;
         }
 
-        console.log(`✅ Log channel found: ${logChannel.name}`);
+        const user = message.author
+            ? `${message.author} \`${message.author.tag}\``
+            : "Unknown User";
 
         const content =
             message.content?.trim() || "*No text content*";
@@ -46,41 +45,49 @@ module.exports = {
             .setTitle("🗑️ Message Deleted")
             .setDescription(
                 `👤 **User**\n` +
-                `${message.author} \`${message.author.tag}\`\n\n` +
+                `${user}\n\n` +
 
                 `📍 **Channel**\n` +
                 `${message.channel}\n\n` +
 
-                `🆔 **Channel ID**\n` +
-                `\`${message.channel.id}\`\n\n` +
-
                 `💬 **Deleted Message**\n` +
                 `> ${content.substring(0, 1000)}`
             )
-            .addFields({
-                name: "🆔 Message ID",
-                value: `\`${message.id}\``,
-                inline: false,
-            })
+            .addFields(
+                {
+                    name: "🆔 Message ID",
+                    value: `\`${message.id}\``,
+                    inline: true,
+                },
+                {
+                    name: "🤖 Bot Message",
+                    value: message.author?.bot
+                        ? "Yes"
+                        : "No",
+                    inline: true,
+                }
+            )
             .setFooter({
                 text: `BauaaCore • ${deletedAt} IST`,
             });
 
-        // Detailed log
+        // Detailed deleted message log
         await logChannel.send({
             embeds: [embed],
         });
 
-        // Short log in all-logs
+        // All logs
         await sendAllLog({
             guild: message.guild,
             title: "🗑️ Message Deleted",
             description:
-                `👤 **User**\n${message.author} \`${message.author.tag}\`\n\n` +
+                `👤 **User**\n${user}\n\n` +
                 `📍 **Channel**\n${message.channel}`,
-            color: 0xED4245,
+            color: 0xE74C3C,
         });
 
-        console.log("✅ Deleted message logs sent!");
+        console.log(
+            `✅ Deleted message logged from #${message.channel.name}`
+        );
     },
 };
