@@ -7,12 +7,6 @@ module.exports = {
     async execute(message) {
         console.log("🗑️ messageDelete event received");
 
-        // Ignore bot messages
-        if (message.author?.bot) {
-            console.log("⏭️ Ignored bot message");
-            return;
-        }
-
         // Ignore DMs
         if (!message.guild) {
             console.log("⏭️ Ignored DM");
