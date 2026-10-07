@@ -38,6 +38,7 @@ const roleDelete = require("./events/roleDelete");
 const roleUpdate = require("./events/roleUpdate");
 
 const voiceStateUpdate = require("./events/voiceStateUpdate");
+const messageDeleteBulk = require("./events/messageDeleteBulk");
 
 
 // ================================
@@ -82,6 +83,16 @@ client.on("messageDelete", async (message) => {
     }
 });
 
+client.on("messageDeleteBulk", async (messages, channel) => {
+    try {
+        await messageDeleteBulk.execute(messages, channel);
+    } catch (error) {
+        console.error(
+            "❌ Bulk Message Delete Logger Error:",
+            error
+        );
+    }
+});
 
 client.on("messageUpdate", async (oldMessage, newMessage) => {
     try {
