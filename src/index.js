@@ -40,6 +40,10 @@ const roleUpdate = require("./events/roleUpdate");
 const voiceStateUpdate = require("./events/voiceStateUpdate");
 
 
+// ================================
+// CLIENT
+// ================================
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -50,6 +54,10 @@ const client = new Client({
     ],
 });
 
+
+// ================================
+// COMMAND COLLECTION
+// ================================
 
 client.commands = new Collection();
 
@@ -67,7 +75,10 @@ client.on("messageDelete", async (message) => {
     try {
         await messageDelete.execute(message);
     } catch (error) {
-        console.error("❌ Message Delete Logger Error:", error);
+        console.error(
+            "❌ Message Delete Logger Error:",
+            error
+        );
     }
 });
 
@@ -76,7 +87,10 @@ client.on("messageUpdate", async (oldMessage, newMessage) => {
     try {
         await messageUpdate.execute(oldMessage, newMessage);
     } catch (error) {
-        console.error("❌ Message Update Logger Error:", error);
+        console.error(
+            "❌ Message Update Logger Error:",
+            error
+        );
     }
 });
 
@@ -89,7 +103,10 @@ client.on("guildMemberAdd", async (member) => {
     try {
         await guildMemberAdd.execute(member);
     } catch (error) {
-        console.error("❌ Member Join Logger Error:", error);
+        console.error(
+            "❌ Member Join Logger Error:",
+            error
+        );
     }
 });
 
@@ -98,16 +115,25 @@ client.on("guildMemberRemove", async (member) => {
     try {
         await guildMemberRemove.execute(member);
     } catch (error) {
-        console.error("❌ Member Leave Logger Error:", error);
+        console.error(
+            "❌ Member Leave Logger Error:",
+            error
+        );
     }
 });
 
 
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
     try {
-        await guildMemberUpdate.execute(oldMember, newMember);
+        await guildMemberUpdate.execute(
+            oldMember,
+            newMember
+        );
     } catch (error) {
-        console.error("❌ Member Update Logger Error:", error);
+        console.error(
+            "❌ Member Update Logger Error:",
+            error
+        );
     }
 });
 
@@ -120,7 +146,10 @@ client.on("guildBanAdd", async (ban) => {
     try {
         await guildBanAdd.execute(ban);
     } catch (error) {
-        console.error("❌ Ban Logger Error:", error);
+        console.error(
+            "❌ Ban Logger Error:",
+            error
+        );
     }
 });
 
@@ -129,7 +158,10 @@ client.on("guildBanRemove", async (ban) => {
     try {
         await guildBanRemove.execute(ban);
     } catch (error) {
-        console.error("❌ Unban Logger Error:", error);
+        console.error(
+            "❌ Unban Logger Error:",
+            error
+        );
     }
 });
 
@@ -142,7 +174,10 @@ client.on("channelCreate", async (channel) => {
     try {
         await channelCreate.execute(channel);
     } catch (error) {
-        console.error("❌ Channel Create Logger Error:", error);
+        console.error(
+            "❌ Channel Create Logger Error:",
+            error
+        );
     }
 });
 
@@ -151,16 +186,25 @@ client.on("channelDelete", async (channel) => {
     try {
         await channelDelete.execute(channel);
     } catch (error) {
-        console.error("❌ Channel Delete Logger Error:", error);
+        console.error(
+            "❌ Channel Delete Logger Error:",
+            error
+        );
     }
 });
 
 
 client.on("channelUpdate", async (oldChannel, newChannel) => {
     try {
-        await channelUpdate.execute(oldChannel, newChannel);
+        await channelUpdate.execute(
+            oldChannel,
+            newChannel
+        );
     } catch (error) {
-        console.error("❌ Channel Update Logger Error:", error);
+        console.error(
+            "❌ Channel Update Logger Error:",
+            error
+        );
     }
 });
 
@@ -173,7 +217,10 @@ client.on("roleCreate", async (role) => {
     try {
         await roleCreate.execute(role);
     } catch (error) {
-        console.error("❌ Role Create Logger Error:", error);
+        console.error(
+            "❌ Role Create Logger Error:",
+            error
+        );
     }
 });
 
@@ -182,16 +229,25 @@ client.on("roleDelete", async (role) => {
     try {
         await roleDelete.execute(role);
     } catch (error) {
-        console.error("❌ Role Delete Logger Error:", error);
+        console.error(
+            "❌ Role Delete Logger Error:",
+            error
+        );
     }
 });
 
 
 client.on("roleUpdate", async (oldRole, newRole) => {
     try {
-        await roleUpdate.execute(oldRole, newRole);
+        await roleUpdate.execute(
+            oldRole,
+            newRole
+        );
     } catch (error) {
-        console.error("❌ Role Update Logger Error:", error);
+        console.error(
+            "❌ Role Update Logger Error:",
+            error
+        );
     }
 });
 
@@ -202,9 +258,15 @@ client.on("roleUpdate", async (oldRole, newRole) => {
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
     try {
-        await voiceStateUpdate.execute(oldState, newState);
+        await voiceStateUpdate.execute(
+            oldState,
+            newState
+        );
     } catch (error) {
-        console.error("❌ Voice Logger Error:", error);
+        console.error(
+            "❌ Voice Logger Error:",
+            error
+        );
     }
 });
 
@@ -216,24 +278,27 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 client.once("ready", async () => {
     console.log(`✅ ${client.user.tag} is online!`);
 
-    for (const guild of client.guilds.cache.values()) {
-        try {
-            await guild.commands.set(
-                [...client.commands.values()].map(command =>
-                    command.data.toJSON()
-                )
-            );
+    try {
+        const commands = [
+            ...client.commands.values(),
+        ].map(command =>
+            command.data.toJSON()
+        );
 
-            console.log(
-                `✅ Commands registered in: ${guild.name}`
-            );
+        // Register commands globally
+        await client.application.commands.set(
+            commands
+        );
 
-        } catch (error) {
-            console.error(
-                `❌ Failed to register commands in ${guild.name}:`,
-                error
-            );
-        }
+        console.log(
+            "✅ Global application commands registered!"
+        );
+
+    } catch (error) {
+        console.error(
+            "❌ Failed to register global commands:",
+            error
+        );
     }
 });
 
@@ -243,13 +308,17 @@ client.once("ready", async () => {
 // ================================
 
 client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.isChatInputCommand()) {
+        return;
+    }
 
     const command = client.commands.get(
         interaction.commandName
     );
 
-    if (!command) return;
+    if (!command) {
+        return;
+    }
 
     try {
         await command.execute(interaction);
@@ -261,7 +330,10 @@ client.on("interactionCreate", async (interaction) => {
         );
 
         try {
-            if (interaction.replied || interaction.deferred) {
+            if (
+                interaction.replied ||
+                interaction.deferred
+            ) {
                 await interaction.editReply(
                     "❌ An error occurred while executing this command."
                 );
