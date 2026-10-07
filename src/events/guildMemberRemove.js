@@ -11,23 +11,21 @@ module.exports = {
     async execute(member) {
         const guild = member.guild;
 
-        const botLogChannel =
-            guild.channels.cache.find(
-                channel =>
-                    channel.name === "main-bots-logs"
-            );
+        // ==================================================
+        // LOG CHANNELS
+        // ==================================================
 
-        const moderationLogChannel =
-            guild.channels.cache.find(
-                channel =>
-                    channel.name === "kick-ban-logs"
-            );
+        const botLogChannel = guild.channels.cache.find(
+            channel => channel.name === "main-bots-logs"
+        );
 
-        const memberLogChannel =
-            guild.channels.cache.find(
-                channel =>
-                    channel.name === "members-log"
-            );
+        const moderationLogChannel = guild.channels.cache.find(
+            channel => channel.name === "kick-ban-logs"
+        );
+
+        const memberLogChannel = guild.channels.cache.find(
+            channel => channel.name === "members-log"
+        );
 
         // ==================================================
         // BOT REMOVED
@@ -140,14 +138,24 @@ module.exports = {
                     text: "BauaaCore • Bot Logs",
                 });
 
-                await sendAllLog({
-                    guild,
-                    title: isKick ? "👢 Bot Kicked" : "🚪 Bot Removed",
-                    description:
-                        `🤖 **Bot**\n${member.user}\n\n` +
-                        `🛡️ **${isKick ? "Kicked" : "Removed"} By**\n${executor}`,
-                    color: isKick ? 0xE67E22 : 0xED4245,
-                });
+            // Detailed bot log
+            await botLogChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
+            await sendAllLog({
+                guild,
+                title: isKick
+                    ? "👢 Bot Kicked"
+                    : "🚪 Bot Removed",
+                description:
+                    `🤖 **Bot**\n${member.user}\n\n` +
+                    `🛡️ **${isKick ? "Kicked" : "Removed"} By**\n${executor}`,
+                color: isKick
+                    ? 0xE67E22
+                    : 0xED4245,
+            });
 
             console.log(
                 `🤖 Bot removed: ${member.user.tag}`
@@ -249,14 +257,20 @@ module.exports = {
                     text: `BauaaCore • Kicked at ${kickedAt} IST`,
                 });
 
-                await sendAllLog({
-                    guild,
-                    title: "👢 Member Kicked",
-                    description:
-                        `👤 **User**\n${member.user}\n\n` +
-                        `🛡️ **Kicked By**\n${executor}`,
-                    color: 0xE67E22,
-                });
+            // Detailed moderation log
+            await moderationLogChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
+            await sendAllLog({
+                guild,
+                title: "👢 Member Kicked",
+                description:
+                    `👤 **User**\n${member.user}\n\n` +
+                    `🛡️ **Kicked By**\n${executor}`,
+                color: 0xE67E22,
+            });
 
             console.log(
                 `👢 Member kicked: ${member.user.tag}`
@@ -331,13 +345,19 @@ module.exports = {
                 text: "BauaaCore • Member Logs",
             });
 
-            await sendAllLog({
-                guild,
-                title: "📤 Member Left",
-                description:
-                    `👤 **User**\n${member.user}`,
-                color: 0xED4245,
-            });
+        // Detailed member log
+        await memberLogChannel.send({
+            embeds: [embed],
+        });
+
+        // Short all-logs entry
+        await sendAllLog({
+            guild,
+            title: "📤 Member Left",
+            description:
+                `👤 **User**\n${member.user}`,
+            color: 0xED4245,
+        });
 
         console.log(
             `📤 Member left: ${member.user.tag}`

@@ -63,13 +63,23 @@ module.exports = {
                 text: `BauaaCore • Unbanned at ${unbannedAt} IST`,
             });
 
-            await sendAllLog({
-                guild,
-                title: "🔓 Member Unbanned",
-                description:
-                    `👤 **User**\n${ban.user}\n\n` +
-                    `🛡️ **Unbanned By**\n${executor}`,
-                color: 0x57F287,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild,
+            title: "🔓 Member Unbanned",
+            description:
+                `👤 **User**\n${ban.user}\n\n` +
+                `🛡️ **Unbanned By**\n${executor}`,
+            color: 0x57F287,
+        });
+
+        console.log(
+            `🔓 Member unbanned: ${ban.user.tag} by ${executor}`
+        );
     },
 };

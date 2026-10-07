@@ -23,8 +23,11 @@ module.exports = {
             return;
         }
 
-        const before = oldMessage.content?.trim() || "*No content*";
-        const after = newMessage.content?.trim() || "*No content*";
+        const before =
+            oldMessage.content?.trim() || "*No content*";
+
+        const after =
+            newMessage.content?.trim() || "*No content*";
 
         const editedAt = new Intl.DateTimeFormat("en-IN", {
             timeZone: "Asia/Kolkata",
@@ -61,13 +64,21 @@ module.exports = {
                 text: `BauaaCore • Edited at ${editedAt} IST`,
             });
 
-            await sendAllLog({
-                guild: newMessage.guild,
-                title: "✏️ Message Edited",
-                description:
-                    `👤 **User**\n${newMessage.author}\n\n` +
-                    `📍 **Channel**\n${newMessage.channel}`,
-                color: 0xF1C40F,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild: newMessage.guild,
+            title: "✏️ Message Edited",
+            description:
+                `👤 **User**\n${newMessage.author}\n\n` +
+                `📍 **Channel**\n${newMessage.channel}`,
+            color: 0xF1C40F,
+        });
+
+        console.log("✅ Edited message logs sent!");
     },
 };

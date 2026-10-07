@@ -84,14 +84,20 @@ module.exports = {
                 text: `BauaaCore • Deleted at ${deletedAt} IST`,
             });
 
-            await sendAllLog({
-                guild: role.guild,
-                title: "🔴 Role Deleted",
-                description:
-                    `🎭 **Role**\n@${role.name}\n\n` +
-                    `👤 **Deleted By**\n${executor}`,
-                color: 0xED4245,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild: role.guild,
+            title: "🔴 Role Deleted",
+            description:
+                `🎭 **Role**\n@${role.name}\n\n` +
+                `👤 **Deleted By**\n${executor}`,
+            color: 0xED4245,
+        });
 
         console.log(
             `🔴 Role deleted: ${role.name} by ${executor}`

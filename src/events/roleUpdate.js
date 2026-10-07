@@ -131,14 +131,20 @@ module.exports = {
                 text: `BauaaCore • Updated at ${updatedAt} IST`,
             });
 
-            await sendAllLog({
-                guild: newRole.guild,
-                title: "✏️ Role Updated",
-                description:
-                    `🎭 **Role**\n${newRole}\n\n` +
-                    `👤 **Updated By**\n${executor}`,
-                color: 0xF1C40F,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild: newRole.guild,
+            title: "✏️ Role Updated",
+            description:
+                `🎭 **Role**\n${newRole}\n\n` +
+                `👤 **Updated By**\n${executor}`,
+            color: 0xF1C40F,
+        });
 
         console.log(
             `✏️ Role updated: ${newRole.name} by ${executor}`

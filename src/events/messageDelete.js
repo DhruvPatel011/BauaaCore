@@ -33,7 +33,8 @@ module.exports = {
 
         console.log(`✅ Log channel found: ${logChannel.name}`);
 
-        const content = message.content?.trim() || "*No text content*";
+        const content =
+            message.content?.trim() || "*No text content*";
 
         const deletedAt = new Intl.DateTimeFormat("en-IN", {
             timeZone: "Asia/Kolkata",
@@ -71,19 +72,21 @@ module.exports = {
                 text: `BauaaCore • ${deletedAt} IST`,
             });
 
-            await logChannel.send({
-                embeds: [embed],
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
 
-            await sendAllLog({
-                guild: message.guild,
-                title: "🗑️ Message Deleted",
-                description:
-                    `👤 **User**\n${message.author} \`${message.author.tag}\`\n\n` +
-                    `📍 **Channel**\n${message.channel}`,
-                color: 0xED4245,
-            });
+        // Short log in all-logs
+        await sendAllLog({
+            guild: message.guild,
+            title: "🗑️ Message Deleted",
+            description:
+                `👤 **User**\n${message.author} \`${message.author.tag}\`\n\n` +
+                `📍 **Channel**\n${message.channel}`,
+            color: 0xED4245,
+        });
 
-            console.log("✅ Deleted message logs sent!");
+        console.log("✅ Deleted message logs sent!");
     },
 };

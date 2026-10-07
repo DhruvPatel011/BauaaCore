@@ -151,7 +151,6 @@ module.exports = {
                     channel.name === "kick-ban-logs"
             );
 
-
         // ==================================================
         // TIMEOUT DETECTION
         // ==================================================
@@ -161,7 +160,6 @@ module.exports = {
 
         const newTimeout =
             newMember.communicationDisabledUntilTimestamp;
-
 
         // ==================================================
         // ROLE DETECTION
@@ -182,7 +180,6 @@ module.exports = {
         const removedRoles = oldMember.roles.cache.filter(
             role => !newRoles.has(role.id)
         );
-
 
         // ==================================================
         // TIMEOUT STARTED
@@ -245,22 +242,27 @@ module.exports = {
                         text: `BauaaCore • Timeout at ${getTime()} IST`,
                     });
 
-                    await sendAllLog({
-                        guild: newMember.guild,
-                        title: "⏱️ Member Timed Out",
-                        description:
-                            `👤 **User**\n${newMember.user}\n\n` +
-                            `🛡️ **Timed Out By**\n${audit.executor}\n\n` +
-                            `⏳ **Duration**\n${duration}`,
-                        color: 0xF1C40F,
-                    });
+                // Detailed moderation log
+                await moderationLogChannel.send({
+                    embeds: [embed],
+                });
+
+                // Short all-logs entry
+                await sendAllLog({
+                    guild: newMember.guild,
+                    title: "⏱️ Member Timed Out",
+                    description:
+                        `👤 **User**\n${newMember.user}\n\n` +
+                        `🛡️ **Timed Out By**\n${audit.executor}\n\n` +
+                        `⏳ **Duration**\n${duration}`,
+                    color: 0xF1C40F,
+                });
 
                 console.log(
                     `⏱️ Timeout: ${newMember.user.tag} for ${duration}`
                 );
             }
         }
-
 
         // ==================================================
         // TIMEOUT REMOVED
@@ -307,21 +309,26 @@ module.exports = {
                         text: `BauaaCore • Timeout removed at ${getTime()} IST`,
                     });
 
-                    await sendAllLog({
-                        guild: newMember.guild,
-                        title: "🔓 Timeout Removed",
-                        description:
-                            `👤 **User**\n${newMember.user}\n\n` +
-                            `🛡️ **Removed By**\n${audit.executor}`,
-                        color: 0x57F287,
-                    });
+                // Detailed moderation log
+                await moderationLogChannel.send({
+                    embeds: [embed],
+                });
+
+                // Short all-logs entry
+                await sendAllLog({
+                    guild: newMember.guild,
+                    title: "🔓 Timeout Removed",
+                    description:
+                        `👤 **User**\n${newMember.user}\n\n` +
+                        `🛡️ **Removed By**\n${audit.executor}`,
+                    color: 0x57F287,
+                });
 
                 console.log(
                     `🔓 Timeout removed: ${newMember.user.tag}`
                 );
             }
         }
-
 
         // ==================================================
         // ROLE ADDED
@@ -375,22 +382,27 @@ module.exports = {
                         text: `BauaaCore • Role added at ${getTime()} IST`,
                     });
 
-                    await sendAllLog({
-                        guild: newMember.guild,
-                        title: "➕ Role Added",
-                        description:
-                            `👤 **Member**\n${newMember.user}\n\n` +
-                            `🎭 **Role**\n${role}\n\n` +
-                            `🛡️ **Added By**\n${audit.executor}`,
-                        color: 0x57F287,
-                    });
+                // Detailed role log
+                await roleLogChannel.send({
+                    embeds: [embed],
+                });
+
+                // Short all-logs entry
+                await sendAllLog({
+                    guild: newMember.guild,
+                    title: "➕ Role Added",
+                    description:
+                        `👤 **Member**\n${newMember.user}\n\n` +
+                        `🎭 **Role**\n${role}\n\n` +
+                        `🛡️ **Added By**\n${audit.executor}`,
+                    color: 0x57F287,
+                });
 
                 console.log(
                     `➕ Role added: ${role.name} → ${newMember.user.tag}`
                 );
             }
         }
-
 
         // ==================================================
         // ROLE REMOVED
@@ -444,15 +456,21 @@ module.exports = {
                         text: `BauaaCore • Role removed at ${getTime()} IST`,
                     });
 
-                    await sendAllLog({
-                        guild: newMember.guild,
-                        title: "➖ Role Removed",
-                        description:
-                            `👤 **Member**\n${newMember.user}\n\n` +
-                            `🎭 **Role**\n${role.name}\n\n` +
-                            `🛡️ **Removed By**\n${audit.executor}`,
-                        color: 0xED4245,
-                    });
+                // Detailed role log
+                await roleLogChannel.send({
+                    embeds: [embed],
+                });
+
+                // Short all-logs entry
+                await sendAllLog({
+                    guild: newMember.guild,
+                    title: "➖ Role Removed",
+                    description:
+                        `👤 **Member**\n${newMember.user}\n\n` +
+                        `🎭 **Role**\n${role.name}\n\n` +
+                        `🛡️ **Removed By**\n${audit.executor}`,
+                    color: 0xED4245,
+                });
 
                 console.log(
                     `➖ Role removed: ${role.name} ← ${newMember.user.tag}`

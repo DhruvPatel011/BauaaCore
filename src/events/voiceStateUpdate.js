@@ -131,6 +131,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🟢 Voice Channel Joined",
@@ -190,6 +196,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔴 Voice Channel Left",
@@ -257,6 +269,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔄 Voice Channel Moved",
@@ -307,6 +325,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔇 Member Server Muted",
@@ -352,7 +376,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
 
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔊 Member Server Unmuted",
@@ -398,6 +427,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔕 Member Server Deafened",
@@ -443,6 +478,12 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
+            // Detailed VC log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
             await sendAllLog({
                 guild,
                 title: "🔔 Member Server Undeafened",

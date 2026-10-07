@@ -71,13 +71,23 @@ module.exports = {
                 text: `BauaaCore • Banned at ${bannedAt} IST`,
             });
 
-            await sendAllLog({
-                guild,
-                title: "🔨 Member Banned",
-                description:
-                    `👤 **User**\n${ban.user}\n\n` +
-                    `🛡️ **Banned By**\n${executor}`,
-                color: 0xED4245,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild,
+            title: "🔨 Member Banned",
+            description:
+                `👤 **User**\n${ban.user}\n\n` +
+                `🛡️ **Banned By**\n${executor}`,
+            color: 0xED4245,
+        });
+
+        console.log(
+            `🔨 Member banned: ${ban.user.tag} by ${executor}`
+        );
     },
 };

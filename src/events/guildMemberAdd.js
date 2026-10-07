@@ -105,14 +105,20 @@ module.exports = {
                     text: "BauaaCore • Bot Logs",
                 });
 
-                await sendAllLog({
-                    guild,
-                    title: "🤖 Bot Added",
-                    description:
-                        `🤖 **Bot**\n${member}\n\n` +
-                        `🛡️ **Added By**\n${executor}`,
-                    color: 0x5865F2,
-                });
+            // Detailed bot log
+            await logChannel.send({
+                embeds: [embed],
+            });
+
+            // Short all-logs entry
+            await sendAllLog({
+                guild,
+                title: "🤖 Bot Added",
+                description:
+                    `🤖 **Bot**\n${member}\n\n` +
+                    `🛡️ **Added By**\n${executor}`,
+                color: 0x5865F2,
+            });
 
             console.log(
                 `🤖 Bot added: ${member.user.tag} by ${executor}`
@@ -183,13 +189,19 @@ module.exports = {
                 text: "BauaaCore • Member Logs",
             });
 
-            await sendAllLog({
-                guild,
-                title: "📥 Member Joined",
-                description:
-                    `👤 **User**\n${member}`,
-                color: 0x57F287,
-            });
+        // Detailed member log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short all-logs entry
+        await sendAllLog({
+            guild,
+            title: "📥 Member Joined",
+            description:
+                `👤 **User**\n${member}`,
+            color: 0x57F287,
+        });
 
         console.log(
             `📥 Member joined: ${member.user.tag}`

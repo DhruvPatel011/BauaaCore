@@ -84,14 +84,20 @@ module.exports = {
                 text: `BauaaCore • Created at ${createdAt} IST`,
             });
 
-            await sendAllLog({
-                guild: role.guild,
-                title: "🟢 Role Created",
-                description:
-                    `🎭 **Role**\n${role}\n\n` +
-                    `👤 **Created By**\n${executor}`,
-                color: 0x57F287,
-            });
+        // Detailed log
+        await logChannel.send({
+            embeds: [embed],
+        });
+
+        // Short log in all-logs
+        await sendAllLog({
+            guild: role.guild,
+            title: "🟢 Role Created",
+            description:
+                `🎭 **Role**\n${role}\n\n` +
+                `👤 **Created By**\n${executor}`,
+            color: 0x57F287,
+        });
 
         console.log(
             `🟢 Role created: ${role.name} by ${executor}`
