@@ -282,6 +282,28 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 
+client.on("shardDisconnect", (event, shardId) => {
+    console.log(
+        `🔴 Discord disconnected | Shard: ${shardId} | Code: ${event.code}`
+    );
+});
+
+client.on("shardReconnecting", (shardId) => {
+    console.log(
+        `🟡 Discord reconnecting | Shard: ${shardId}`
+    );
+});
+
+client.on("shardResume", (shardId, replayedEvents) => {
+    console.log(
+        `🟢 Discord connection resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
+    );
+});
+
+client.on("error", (error) => {
+    console.error("❌ Discord Client Error:", error);
+});
+
 // ================================
 // BOT READY
 // ================================
