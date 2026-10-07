@@ -1,1 +1,2 @@
 # BauaaCore
+## Discord Bot
