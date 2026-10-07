@@ -15,11 +15,13 @@ const {
     Client,
     GatewayIntentBits,
     Collection,
+    Partials,
 } = require("discord.js");
 
 const setupLogsCommand = require("./commands/setupLogs");
 
 const messageDelete = require("./events/messageDelete");
+const messageDeleteBulk = require("./events/messageDeleteBulk");
 const messageUpdate = require("./events/messageUpdate");
 
 const guildMemberAdd = require("./events/guildMemberAdd");
@@ -38,7 +40,6 @@ const roleDelete = require("./events/roleDelete");
 const roleUpdate = require("./events/roleUpdate");
 
 const voiceStateUpdate = require("./events/voiceStateUpdate");
-const messageDeleteBulk = require("./events/messageDeleteBulk");
 
 
 // ================================
@@ -52,6 +53,10 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates,
+    ],
+
+    partials: [
+        Partials.Message,
     ],
 });
 
@@ -69,10 +74,12 @@ client.commands.set(
 
 
 // ================================
-// MESSAGE LOGS
+// MESSAGE DELETE LOGS
 // ================================
 
 client.on("messageDelete", async (message) => {
+    console.log("🔥 MESSAGE DELETE EVENT RECEIVED");
+
     try {
         await messageDelete.execute(message);
     } catch (error) {
@@ -83,9 +90,17 @@ client.on("messageDelete", async (message) => {
     }
 });
 
+
 client.on("messageDeleteBulk", async (messages, channel) => {
+    console.log(
+        `🔥 BULK DELETE EVENT RECEIVED | ${messages.size} messages`
+    );
+
     try {
-        await messageDeleteBulk.execute(messages, channel);
+        await messageDeleteBulk.execute(
+            messages,
+            channel
+        );
     } catch (error) {
         console.error(
             "❌ Bulk Message Delete Logger Error:",
@@ -94,9 +109,13 @@ client.on("messageDeleteBulk", async (messages, channel) => {
     }
 });
 
+
 client.on("messageUpdate", async (oldMessage, newMessage) => {
     try {
-        await messageUpdate.execute(oldMessage, newMessage);
+        await messageUpdate.execute(
+            oldMessage,
+            newMessage
+        );
     } catch (error) {
         console.error(
             "❌ Message Update Logger Error:",
@@ -282,34 +301,47 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 
+// ================================
+// DISCORD CONNECTION MONITOR
+// ================================
+
 client.on("shardDisconnect", (event, shardId) => {
     console.log(
-        `🔴 Discord disconnected | Shard: ${shardId} | Code: ${event.code}`
+        `🔴 Discord Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
     );
 });
+
 
 client.on("shardReconnecting", (shardId) => {
     console.log(
-        `🟡 Discord reconnecting | Shard: ${shardId}`
+        `🟡 Discord Gateway reconnecting | Shard: ${shardId}`
     );
 });
+
 
 client.on("shardResume", (shardId, replayedEvents) => {
     console.log(
-        `🟢 Discord connection resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
+        `🟢 Discord Gateway resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
     );
 });
 
+
 client.on("error", (error) => {
-    console.error("❌ Discord Client Error:", error);
+    console.error(
+        "❌ Discord Client Error:",
+        error
+    );
 });
+
 
 // ================================
 // BOT READY
 // ================================
 
-client.once("ready", async () => {
-    console.log(`✅ ${client.user.tag} is online!`);
+client.once("clientReady", async () => {
+    console.log(
+        `✅ ${client.user.tag} is online!`
+    );
 
     try {
         const commands = [
@@ -318,7 +350,6 @@ client.once("ready", async () => {
             command.data.toJSON()
         );
 
-        // Register commands globally
         await client.application.commands.set(
             commands
         );

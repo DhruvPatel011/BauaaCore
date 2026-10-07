@@ -7,18 +7,20 @@ module.exports = {
     async execute(message) {
         console.log("🗑️ messageDelete event received");
 
-        // Ignore DMs
         if (!message.guild) {
             console.log("⏭️ Ignored DM message");
             return;
         }
 
         const logChannel = message.guild.channels.cache.find(
-            channel => channel.name === "deleted-msg-logs"
+            channel =>
+                channel.name === "deleted-msg-logs"
         );
 
         if (!logChannel) {
-            console.log("❌ deleted-msg-logs channel not found");
+            console.log(
+                "❌ deleted-msg-logs channel not found"
+            );
             return;
         }
 
@@ -27,18 +29,22 @@ module.exports = {
             : "Unknown User";
 
         const content =
-            message.content?.trim() || "*No text content*";
+            message.content?.trim() ||
+            "*No text content available*";
 
-        const deletedAt = new Intl.DateTimeFormat("en-IN", {
-            timeZone: "Asia/Kolkata",
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: true,
-        }).format(new Date());
+        const deletedAt = new Intl.DateTimeFormat(
+            "en-IN",
+            {
+                timeZone: "Asia/Kolkata",
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: true,
+            }
+        ).format(new Date());
 
         const embed = new EmbedBuilder()
             .setColor(0xE74C3C)
@@ -68,7 +74,9 @@ module.exports = {
                 }
             )
             .setFooter({
-                text: `BauaaCore • ${deletedAt} IST`,
+                text:
+                    `BauaaCore • ` +
+                    `${deletedAt} IST`,
             });
 
         // Detailed deleted message log
@@ -76,13 +84,19 @@ module.exports = {
             embeds: [embed],
         });
 
-        // All logs
+        // Short log in all-logs
         await sendAllLog({
             guild: message.guild,
+
             title: "🗑️ Message Deleted",
+
             description:
-                `👤 **User**\n${user}\n\n` +
-                `📍 **Channel**\n${message.channel}`,
+                `👤 **User**\n` +
+                `${user}\n\n` +
+
+                `📍 **Channel**\n` +
+                `${message.channel}`,
+
             color: 0xE74C3C,
         });
 
