@@ -12,14 +12,14 @@ module.exports = {
         if (!newMessage.guild) return;
 
         // Ignore messages where content did not actually change
-        if (oldMessage.content
-             === newMessage.content) return;
+        if (oldMessage.content === newMessage.content) return;
 
         const logChannel = newMessage.guild.channels.cache.find(
             channel => channel.name === "edited-msg-logs"
         );
 
         if (!logChannel) {
+            console.log("❌ edited-msg-logs channel not found");
             return;
         }
 

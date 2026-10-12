@@ -32,6 +32,9 @@ module.exports = {
             );
 
         if (!logChannel) {
+            console.log(
+                "❌ deleted-msg-logs channel not found"
+            );
             return;
         }
 

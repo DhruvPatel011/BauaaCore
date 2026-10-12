@@ -21,6 +21,9 @@ module.exports = {
             );
 
             if (!logChannel) {
+                console.log(
+                    "❌ main-bots-logs channel not found"
+                );
                 return;
             }
 

@@ -22,6 +22,7 @@ module.exports = {
         );
 
         if (!logChannel) {
+            console.log("❌ role-logs channel not found");
             return;
         }
 

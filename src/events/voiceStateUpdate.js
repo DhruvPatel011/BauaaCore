@@ -1,6 +1,5 @@
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
-const logConfig = require("../config/logs");
 
 // Store when each user joined a voice channel
 const voiceSessions = new Map();
@@ -76,18 +75,12 @@ module.exports = {
 
         if (!guild) return;
 
-        const logsConfig = require("../config/logs");
-
-        const channelName = logConfig.channels.voice;
-
         const logChannel = guild.channels.cache.find(
-            channel =>
-                channel.guildId === guild.id &&
-                channel.name === channelName &&
-                channel.type === 0
+            channel => channel.name === "vc-logs"
         );
 
         if (!logChannel) {
+            console.log("❌ vc-logs channel not found");
             return;
         }
 
