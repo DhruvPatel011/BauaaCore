@@ -422,4 +422,27 @@ client.on("interactionCreate", async (interaction) => {
 // LOGIN
 // ================================
 
-client.login(process.env.DISCORD_TOKEN);
+client.on("shardError", (error, shardId) => {
+    console.error(
+        `❌ Gateway shard error (${shardId}):`,
+        error
+    );
+});
+
+client.on("shardDisconnect", (event, shardId) => {
+    console.error(
+        `🔴 Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
+    );
+});
+
+client.on("shardReconnecting", (shardId) => {
+    console.warn(`🟡 Reconnecting shard ${shardId}`);
+});
+
+client.on("invalidated", () => {
+    console.error("❌ Discord session invalidated. Restart/login may be required.");
+});
+
+client.login(process.env.DISCORD_TOKEN).catch((error) => {
+    console.error("❌ Discord login failed:", error);
+});
