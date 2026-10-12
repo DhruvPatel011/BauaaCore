@@ -443,6 +443,21 @@ client.on("invalidated", () => {
     console.error("❌ Discord session invalidated. Restart/login may be required.");
 });
 
+// ================================
+// DISCORD HEALTH MONITOR
+// ================================
+
+setInterval(() => {
+    console.log(
+        `[HEALTH] ${new Date().toISOString()} | ` +
+        `Process: RUNNING | ` +
+        `Discord Ready: ${client.isReady()} | ` +
+        `WS Status: ${client.ws.status} | ` +
+        `Ping: ${client.ws.ping}ms`
+    );
+}, 60_000);
+
+
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
     console.error("❌ Discord login failed:", error);
 });
