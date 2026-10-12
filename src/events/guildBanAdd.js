@@ -1,5 +1,7 @@
+
 const { EmbedBuilder, AuditLogEvent } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { channels } = require("../config/logs");
 
 module.exports = {
     name: "guildBanAdd",
@@ -8,10 +10,15 @@ module.exports = {
         const guild = ban.guild;
 
         const logChannel = guild.channels.cache.find(
-            channel => channel.name === "kick-ban-logs"
+            channel => channel.name === channels.moderation
         );
 
-        if (!logChannel) return;
+        if (!logChannel) {
+            console.error(
+                `❌ Moderation log channel not found: ${channels.moderation}`
+            );
+            return;
+        }
 
         let executor = "Unknown";
         let reason = "No reason provided";
@@ -30,7 +37,7 @@ module.exports = {
 
             if (entry) {
                 executor = entry.executor
-                    ? `${entry.executor} \`${entry.executor.tag}\``
+                    ? `${entry.executor} (\`${entry.executor.tag ?? entry.executor.username}\`)`
                     : "Unknown";
 
                 reason = entry.reason || "No reason provided";
@@ -53,38 +60,37 @@ module.exports = {
         const embed = new EmbedBuilder()
             .setColor(0xED4245)
             .setTitle("🔨 Member Banned")
-            .setThumbnail(ban.user.displayAvatarURL({ size: 256 }))
+            .setThumbnail(
+                ban.user.displayAvatarURL({ size: 256 })
+            )
             .setDescription(
-                `👤 **User**\n` +
-                `${ban.user} \`${ban.user.tag}\`\n\n` +
-
-                `🆔 **User ID**\n` +
-                `\`${ban.user.id}\`\n\n` +
-
-                `🛡️ **Banned By**\n` +
-                `${executor}\n\n` +
-
-                `📝 **Reason**\n` +
-                `${reason}`
+                `👤 **User**\n${ban.user} (\`${ban.user.tag}\`)\n\n` +
+                `🆔 **User ID**\n\`${ban.user.id}\`\n\n` +
+                `🛡️ **Banned By**\n${executor}\n\n` +
+                `📝 **Reason**\n${reason}`
             )
             .setFooter({
                 text: `BauaaCore • Banned at ${bannedAt} IST`,
             });
 
-        // Detailed log
-        await logChannel.send({
-            embeds: [embed],
-        });
+        try {
+            await logChannel.send({ embeds: [embed] });
+        } catch (error) {
+            console.error("❌ Failed to send ban log:", error);
+        }
 
-        // Short log in all-logs
-        await sendAllLog({
-            guild,
-            title: "🔨 Member Banned",
-            description:
-                `👤 **User**\n${ban.user}\n\n` +
-                `🛡️ **Banned By**\n${executor}`,
-            color: 0xED4245,
-        });
+        try {
+            await sendAllLog({
+                guild,
+                title: "🔨 Member Banned",
+                description:
+                    `👤 **User**\n${ban.user} (\`${ban.user.tag}\`)\n\n` +
+                    `🛡️ **Banned By**\n${executor}`,
+                color: 0xED4245,
+            });
+        } catch (error) {
+            console.error("❌ Failed to send ban summary:", error);
+        }
 
         console.log(
             `🔨 Member banned: ${ban.user.tag} by ${executor}`

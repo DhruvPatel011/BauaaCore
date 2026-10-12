@@ -19,7 +19,6 @@ module.exports = {
         );
 
         if (!logChannel) {
-            console.log("❌ edited-msg-logs channel not found");
             return;
         }
 

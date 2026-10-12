@@ -80,7 +80,6 @@ module.exports = {
         );
 
         if (!logChannel) {
-            console.log("❌ vc-logs channel not found");
             return;
         }
 

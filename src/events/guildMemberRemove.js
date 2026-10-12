@@ -33,9 +33,6 @@ module.exports = {
 
         if (member.user.bot) {
             if (!botLogChannel) {
-                console.log(
-                    "❌ main-bots-logs channel not found"
-                );
                 return;
             }
 
