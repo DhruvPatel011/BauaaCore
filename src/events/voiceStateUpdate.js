@@ -75,12 +75,21 @@ module.exports = {
 
         if (!guild) return;
 
+        const logsConfig = require("../config/logs");
+
         const logChannel = guild.channels.cache.find(
-            channel => channel.name === "vc-logs"
+            channel =>
+                channel.name === logsConfig.channels.voice &&
+                channel.isTextBased()
         );
 
         if (!logChannel) {
-            console.log("❌ vc-logs channel not found");
+            console.warn(
+                `⚠️ Voice log channel missing | ` +
+                `Server: ${guild.name} | ` +
+                `Guild ID: ${guild.id} | ` +
+                `Expected channel: ${logsConfig.channels.voice}`
+            );
             return;
         }
 
