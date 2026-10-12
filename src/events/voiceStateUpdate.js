@@ -88,11 +88,6 @@ module.exports = {
         );
 
         if (!logChannel) {
-            console.warn(
-                `⚠️ Voice log channel missing | ` +
-                `Server: ${guild.name} (${guild.id}) | ` +
-                `Expected: ${channelName}`
-            );
             return;
         }
 
