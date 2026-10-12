@@ -1,33 +1,15 @@
 require("dotenv").config();
 
-
 const http = require("http");
 
 const PORT = process.env.PORT || 10000;
 
-const server = http.createServer((req, res) => {
-    if (req.url === "/health") {
-        res.writeHead(200, {
-            "Content-Type": "application/json"
-        });
-
-        return res.end(JSON.stringify({
-            status: "ok",
-            service: "BauaaCore"
-        }));
-    }
-
-    res.writeHead(200, {
-        "Content-Type": "text/plain"
-    });
-
+http.createServer((req, res) => {
+    res.writeHead(200);
     res.end("BauaaCore is online!");
-});
-
-server.listen(PORT, "0.0.0.0", () => {
+}).listen(PORT, "0.0.0.0", () => {
     console.log(`🌐 HTTP server running on port ${PORT}`);
 });
-
 
 const {
     Client,
@@ -440,42 +422,4 @@ client.on("interactionCreate", async (interaction) => {
 // LOGIN
 // ================================
 
-client.on("shardError", (error, shardId) => {
-    console.error(
-        `❌ Gateway shard error (${shardId}):`,
-        error
-    );
-});
-
-client.on("shardDisconnect", (event, shardId) => {
-    console.error(
-        `🔴 Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
-    );
-});
-
-client.on("shardReconnecting", (shardId) => {
-    console.warn(`🟡 Reconnecting shard ${shardId}`);
-});
-
-client.on("invalidated", () => {
-    console.error("❌ Discord session invalidated. Restart/login may be required.");
-});
-
-// ================================
-// DISCORD HEALTH MONITOR
-// ================================
-
-setInterval(() => {
-    console.log(
-        `[HEALTH] ${new Date().toISOString()} | ` +
-        `Process: RUNNING | ` +
-        `Discord Ready: ${client.isReady()} | ` +
-        `WS Status: ${client.ws.status} | ` +
-        `Ping: ${client.ws.ping}ms`
-    );
-}, 60_000);
-
-
-client.login(process.env.DISCORD_TOKEN).catch((error) => {
-    console.error("❌ Discord login failed:", error);
-});
+client.login(process.env.DISCORD_TOKEN);
