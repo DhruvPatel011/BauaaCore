@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const logConfig = require("../config/logs");
 
 // Store when each user joined a voice channel
 const voiceSessions = new Map();
@@ -77,18 +78,20 @@ module.exports = {
 
         const logsConfig = require("../config/logs");
 
+        const channelName = logConfig.channels.voice;
+
         const logChannel = guild.channels.cache.find(
             channel =>
-                channel.name === logsConfig.channels.voice &&
-                channel.isTextBased()
+                channel.guildId === guild.id &&
+                channel.name === channelName &&
+                channel.type === 0
         );
 
         if (!logChannel) {
             console.warn(
                 `⚠️ Voice log channel missing | ` +
-                `Server: ${guild.name} | ` +
-                `Guild ID: ${guild.id} | ` +
-                `Expected channel: ${logsConfig.channels.voice}`
+                `Server: ${guild.name} (${guild.id}) | ` +
+                `Expected: ${channelName}`
             );
             return;
         }
