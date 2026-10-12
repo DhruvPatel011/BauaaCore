@@ -50,6 +50,7 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildModeration,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates,
@@ -59,7 +60,6 @@ const client = new Client({
         Partials.Message,
     ],
 });
-
 
 // ================================
 // COMMAND COLLECTION
@@ -173,28 +173,24 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
 // ================================
 
 client.on("guildBanAdd", async (ban) => {
+    console.log("🔨 BAN EVENT RECEIVED:", ban.user.tag);
+
     try {
         await guildBanAdd.execute(ban);
     } catch (error) {
-        console.error(
-            "❌ Ban Logger Error:",
-            error
-        );
+        console.error("❌ Ban Logger Error:", error);
     }
 });
 
-
 client.on("guildBanRemove", async (ban) => {
+    console.log("🔓 UNBAN EVENT RECEIVED:", ban.user.tag);
+
     try {
         await guildBanRemove.execute(ban);
     } catch (error) {
-        console.error(
-            "❌ Unban Logger Error:",
-            error
-        );
+        console.error("❌ Unban Logger Error:", error);
     }
 });
-
 
 // ================================
 // CHANNEL LOGS
