@@ -96,7 +96,6 @@ module.exports = {
         );
 
         if (!logChannel) {
-            console.log("❌ channel-logs channel not found");
             return;
         }
 
