@@ -11,6 +11,17 @@ const {
 } = require("discord.js");
 
 // ========================================
+// CONFIGURATION
+// ========================================
+
+const PORT = Number(process.env.PORT) || 10000;
+
+if (!process.env.DISCORD_TOKEN) {
+    console.error("❌ DISCORD_TOKEN is missing!");
+    process.exit(1);
+}
+
+// ========================================
 // COMMANDS
 // ========================================
 
@@ -40,21 +51,9 @@ const events = {
     roleDelete: require("./events/roleDelete"),
     roleUpdate: require("./events/roleUpdate"),
 
-    // Voice channel activity logs only.
-    // No music playback or Lavalink.
+    // Voice channel join/leave logs only.
     voiceStateUpdate: require("./events/voiceStateUpdate"),
 };
-
-// ========================================
-// CONFIGURATION
-// ========================================
-
-const PORT = Number(process.env.PORT) || 10000;
-
-if (!process.env.DISCORD_TOKEN) {
-    console.error("❌ DISCORD_TOKEN is missing!");
-    process.exit(1);
-}
 
 // ========================================
 // DISCORD CLIENT
@@ -238,12 +237,40 @@ registerEvent(
 
 const server = http.createServer((req, res) => {
 
-    if (req.url === "/" || req.url === "/health") {
+    // Parse URL safely.
+    // Supports /health, /health/, and /health?check=1
+
+    let pathname;
+
+    try {
+        pathname = new URL(
+            req.url,
+            `http://${req.headers.host || "localhost"}`
+        ).pathname;
+
+        pathname = pathname.replace(/\/+$/, "") || "/";
+
+    } catch (error) {
+        res.writeHead(400, {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+        });
+
+        return res.end(JSON.stringify({
+            error: "Bad Request",
+        }));
+    }
+
+    // Main health endpoint.
+    // HTTP 200 means the Node.js service is responding.
+    // Discord status is reported separately.
+
+    if (pathname === "/" || pathname === "/health") {
 
         const discordConnected = client.isReady();
 
         res.writeHead(200, {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "Cache-Control": "no-store",
         });
 
@@ -258,22 +285,61 @@ const server = http.createServer((req, res) => {
         }));
     }
 
+    // Optional readiness endpoint.
+    // Returns 503 if Discord is not connected.
+
+    if (pathname === "/ready") {
+
+        const discordConnected = client.isReady();
+
+        res.writeHead(
+            discordConnected ? 200 : 503,
+            {
+                "Content-Type": "application/json; charset=utf-8",
+                "Cache-Control": "no-store",
+            }
+        );
+
+        return res.end(JSON.stringify({
+            service: "BauaaCore",
+            status: discordConnected ? "ready" : "not_ready",
+            discord: discordConnected
+                ? "connected"
+                : "disconnected",
+            timestamp: new Date().toISOString(),
+        }));
+    }
+
+    // Unknown routes.
+
     res.writeHead(404, {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
     });
 
-    res.end(JSON.stringify({
+    return res.end(JSON.stringify({
         error: "Not Found",
+        path: pathname,
     }));
 });
 
+// HTTP server error handling.
+
 server.on("error", (error) => {
     console.error("❌ HTTP SERVER ERROR:", error);
+
     process.exit(1);
 });
 
+// Listen on Render's assigned port.
+
 server.listen(PORT, "0.0.0.0", () => {
-    console.log(`🌐 HTTP server running on port ${PORT}`);
+    console.log("----------------------------------");
+    console.log("🌐 BauaaCore HTTP Server Started");
+    console.log(`📡 Port: ${PORT}`);
+    console.log("❤️ Health: /health");
+    console.log("🟢 Readiness: /ready");
+    console.log("----------------------------------");
 });
 
 // ========================================
@@ -330,8 +396,8 @@ client.once("clientReady", async () => {
             ...client.commands.values(),
         ].map(command => command.data.toJSON());
 
-        // Registers only the commands in this project.
-        // Old global music commands will be removed.
+        // Register only current project commands.
+        // Previous global commands not included here are removed.
 
         await client.application.commands.set(commands);
 
@@ -434,7 +500,11 @@ async function shutdown(signal) {
         `🛑 ${signal} received. Shutting down BauaaCore...`
     );
 
+    // Disconnect Discord client.
+
     client.destroy();
+
+    // Close HTTP server.
 
     if (server.listening) {
         await new Promise((resolve) => {
