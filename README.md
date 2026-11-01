@@ -14,7 +14,7 @@ BauaaCore is an open-source Discord bot that helps server owners organize their 
 
 ## Logging Channels
 
-The bot creates an `All Log & Info` category with separate channels for different events.
+The bot creates an `All Log & Info` category with separate channels for different events..
 
 | Channel | Purpose |
 |---|---|
