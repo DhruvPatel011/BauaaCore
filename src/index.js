@@ -422,8 +422,6 @@ process.on("uncaughtException", (error) => {
 let isShuttingDown = false;
 
 
-let isShuttingDown = false;
-
 async function shutdown(signal) {
     if (isShuttingDown) return;
 
