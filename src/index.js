@@ -1,7 +1,8 @@
 
 require("dotenv").config();
 
-const http = require("node:http");
+const http = require("http");
+
 const {
     Client,
     GatewayIntentBits,
@@ -9,34 +10,55 @@ const {
     Partials,
 } = require("discord.js");
 
-const setupLogsCommand = require("./commands/setupLogs");
-const musicCommands = require("./commands/music");
-const { createMusicManager } = require("./music/manager");
-const { ensureStore } = require("./music/store");
+// ========================================
+// COMMANDS
+// ========================================
 
-// Existing logging events
-const messageDelete = require("./events/messageDelete");
-const messageDeleteBulk = require("./events/messageDeleteBulk");
-const messageUpdate = require("./events/messageUpdate");
-const guildMemberAdd = require("./events/guildMemberAdd");
-const guildMemberRemove = require("./events/guildMemberRemove");
-const guildMemberUpdate = require("./events/guildMemberUpdate");
-const guildBanAdd = require("./events/guildBanAdd");
-const guildBanRemove = require("./events/guildBanRemove");
-const channelCreate = require("./events/channelCreate");
-const channelDelete = require("./events/channelDelete");
-const channelUpdate = require("./events/channelUpdate");
-const roleCreate = require("./events/roleCreate");
-const roleDelete = require("./events/roleDelete");
-const roleUpdate = require("./events/roleUpdate");
-const voiceStateUpdate = require("./events/voiceStateUpdate");
+const setupLogsCommand = require("./commands/setupLogs");
+
+// ========================================
+// LOGGING EVENTS
+// ========================================
+
+const events = {
+    messageDelete: require("./events/messageDelete"),
+    messageDeleteBulk: require("./events/messageDeleteBulk"),
+    messageUpdate: require("./events/messageUpdate"),
+
+    guildMemberAdd: require("./events/guildMemberAdd"),
+    guildMemberRemove: require("./events/guildMemberRemove"),
+    guildMemberUpdate: require("./events/guildMemberUpdate"),
+
+    guildBanAdd: require("./events/guildBanAdd"),
+    guildBanRemove: require("./events/guildBanRemove"),
+
+    channelCreate: require("./events/channelCreate"),
+    channelDelete: require("./events/channelDelete"),
+    channelUpdate: require("./events/channelUpdate"),
+
+    roleCreate: require("./events/roleCreate"),
+    roleDelete: require("./events/roleDelete"),
+    roleUpdate: require("./events/roleUpdate"),
+
+    // Voice channel activity logs only.
+    // No music playback or Lavalink.
+    voiceStateUpdate: require("./events/voiceStateUpdate"),
+};
+
+// ========================================
+// CONFIGURATION
+// ========================================
 
 const PORT = Number(process.env.PORT) || 10000;
 
 if (!process.env.DISCORD_TOKEN) {
-    console.error("[Startup] DISCORD_TOKEN is missing.");
+    console.error("❌ DISCORD_TOKEN is missing!");
     process.exit(1);
 }
+
+// ========================================
+// DISCORD CLIENT
+// ========================================
 
 const client = new Client({
     intents: [
@@ -47,10 +69,16 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates,
     ],
-    partials: [Partials.Message],
+
+    partials: [
+        Partials.Message,
+    ],
 });
 
-// Register commands
+// ========================================
+// COMMAND COLLECTION
+// ========================================
+
 client.commands = new Collection();
 
 client.commands.set(
@@ -58,47 +86,162 @@ client.commands.set(
     setupLogsCommand
 );
 
-for (const command of musicCommands.commands) {
-    client.commands.set(command.data.name, command);
-}
+// ========================================
+// EVENT REGISTRATION
+// ========================================
 
-// Existing logging event registration
-function registerEvent(eventName, handler) {
+function registerEvent(eventName, handler, logger = null) {
     client.on(eventName, async (...args) => {
+
+        if (logger) {
+            try {
+                logger(...args);
+            } catch (error) {
+                console.error(
+                    `❌ ${eventName} Console Logger Error:`,
+                    error
+                );
+            }
+        }
+
         try {
             await handler.execute(...args);
         } catch (error) {
             console.error(
-                `[Logs] ${eventName}: ${error.message || error}`
+                `❌ ${eventName} Event Error:`,
+                error
             );
         }
     });
 }
 
-registerEvent("messageDelete", messageDelete);
-registerEvent("messageDeleteBulk", messageDeleteBulk);
-registerEvent("messageUpdate", messageUpdate);
+// ========================================
+// MESSAGE LOGS
+// ========================================
 
-registerEvent("guildMemberAdd", guildMemberAdd);
-registerEvent("guildMemberRemove", guildMemberRemove);
-registerEvent("guildMemberUpdate", guildMemberUpdate);
+registerEvent(
+    "messageDelete",
+    events.messageDelete,
+    () => console.log("🔥 MESSAGE DELETE EVENT RECEIVED")
+);
 
-registerEvent("guildBanAdd", guildBanAdd);
-registerEvent("guildBanRemove", guildBanRemove);
+registerEvent(
+    "messageDeleteBulk",
+    events.messageDeleteBulk,
+    (messages) => {
+        console.log(
+            `🔥 BULK DELETE EVENT RECEIVED | ${messages.size} messages`
+        );
+    }
+);
 
-registerEvent("channelCreate", channelCreate);
-registerEvent("channelDelete", channelDelete);
-registerEvent("channelUpdate", channelUpdate);
+registerEvent(
+    "messageUpdate",
+    events.messageUpdate
+);
 
-registerEvent("roleCreate", roleCreate);
-registerEvent("roleDelete", roleDelete);
-registerEvent("roleUpdate", roleUpdate);
+// ========================================
+// MEMBER LOGS
+// ========================================
 
-registerEvent("voiceStateUpdate", voiceStateUpdate);
+registerEvent(
+    "guildMemberAdd",
+    events.guildMemberAdd
+);
 
-// HTTP health server
+registerEvent(
+    "guildMemberRemove",
+    events.guildMemberRemove
+);
+
+registerEvent(
+    "guildMemberUpdate",
+    events.guildMemberUpdate
+);
+
+// ========================================
+// BAN / UNBAN LOGS
+// ========================================
+
+registerEvent(
+    "guildBanAdd",
+    events.guildBanAdd,
+    (ban) => {
+        console.log(
+            "🔨 BAN EVENT RECEIVED:",
+            ban.user?.tag || "Unknown user"
+        );
+    }
+);
+
+registerEvent(
+    "guildBanRemove",
+    events.guildBanRemove,
+    (ban) => {
+        console.log(
+            "🔓 UNBAN EVENT RECEIVED:",
+            ban.user?.tag || "Unknown user"
+        );
+    }
+);
+
+// ========================================
+// CHANNEL LOGS
+// ========================================
+
+registerEvent(
+    "channelCreate",
+    events.channelCreate
+);
+
+registerEvent(
+    "channelDelete",
+    events.channelDelete
+);
+
+registerEvent(
+    "channelUpdate",
+    events.channelUpdate
+);
+
+// ========================================
+// ROLE LOGS
+// ========================================
+
+registerEvent(
+    "roleCreate",
+    events.roleCreate
+);
+
+registerEvent(
+    "roleDelete",
+    events.roleDelete
+);
+
+registerEvent(
+    "roleUpdate",
+    events.roleUpdate
+);
+
+// ========================================
+// VOICE CHANNEL LOGS
+// ========================================
+
+registerEvent(
+    "voiceStateUpdate",
+    events.voiceStateUpdate
+);
+
+// ========================================
+// HTTP HEALTH SERVER
+// ========================================
+
 const server = http.createServer((req, res) => {
+
     if (req.url === "/" || req.url === "/health") {
+
+        const discordConnected = client.isReady();
+
         res.writeHead(200, {
             "Content-Type": "application/json",
             "Cache-Control": "no-store",
@@ -107,9 +250,11 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify({
             service: "BauaaCore",
             status: "running",
-            discord: client.isReady() ? "connected" : "connecting",
-            music: client.music ? "enabled" : "starting",
+            discord: discordConnected
+                ? "connected"
+                : "disconnected",
             uptime: Math.floor(process.uptime()),
+            timestamp: new Date().toISOString(),
         }));
     }
 
@@ -122,169 +267,204 @@ const server = http.createServer((req, res) => {
     }));
 });
 
-server.on("error", error => {
-    console.error("[HTTP]", error.message);
+server.on("error", (error) => {
+    console.error("❌ HTTP SERVER ERROR:", error);
     process.exit(1);
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[HTTP] Server listening on port ${PORT}`);
+    console.log(`🌐 HTTP server running on port ${PORT}`);
 });
 
-// Discord connection events
+// ========================================
+// DISCORD CONNECTION MONITOR
+// ========================================
+
 client.on("shardDisconnect", (event, shardId) => {
-    console.warn(
-        `[Discord] Shard ${shardId} disconnected (${event.code}).`
+    console.error(
+        `🔴 Discord Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
     );
 });
 
-client.on("shardReconnecting", shardId => {
-    console.log(`[Discord] Reconnecting shard ${shardId}...`);
+client.on("shardReconnecting", (shardId) => {
+    console.log(
+        `🟡 Discord Gateway reconnecting | Shard: ${shardId}`
+    );
 });
 
-client.on("shardResume", shardId => {
-    console.log(`[Discord] Shard ${shardId} resumed.`);
+client.on("shardResume", (shardId, replayedEvents) => {
+    console.log(
+        `🟢 Discord Gateway resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
+    );
 });
 
-client.on("shardError", error => {
-    console.error("[Discord] Gateway error:", error.message);
+client.on("shardError", (error, shardId) => {
+    console.error(
+        `❌ Discord Shard Error | Shard: ${shardId}`,
+        error
+    );
 });
 
-client.on("error", error => {
-    console.error("[Discord] Client error:", error.message);
+client.on("error", (error) => {
+    console.error("❌ Discord Client Error:", error);
 });
 
-// Bot ready
+client.on("warn", (message) => {
+    console.warn("⚠️ Discord Warning:", message);
+});
+
+// ========================================
+// BOT READY
+// ========================================
+
 client.once("clientReady", async () => {
-    console.log("--------------------------------");
-    console.log(`[Bot] ${client.user.tag} is online.`);
-    console.log(`[Bot] Servers: ${client.guilds.cache.size}`);
-    console.log("--------------------------------");
+
+    console.log("----------------------------------");
+    console.log(`✅ ${client.user.tag} is ONLINE!`);
+    console.log(`🆔 Bot ID: ${client.user.id}`);
+    console.log(`🌐 Servers: ${client.guilds.cache.size}`);
+    console.log("----------------------------------");
 
     try {
-        const payload = [...client.commands.values()].map(command =>
-            command.data.toJSON()
-        );
+        const commands = [
+            ...client.commands.values(),
+        ].map(command => command.data.toJSON());
 
-        await client.application.commands.set(payload);
+        // Registers only the commands in this project.
+        // Old global music commands will be removed.
 
-        console.log(
-            `[Commands] Registered ${payload.length} slash commands.`
-        );
+        await client.application.commands.set(commands);
+
+        console.log("✅ Global application commands registered!");
+
     } catch (error) {
-        console.error("[Commands] Registration failed:", error.message);
+        console.error(
+            "❌ Failed to register global commands:",
+            error
+        );
     }
 });
 
-// Interactions
-client.on("interactionCreate", async interaction => {
+// ========================================
+// SLASH COMMAND HANDLER
+// ========================================
+
+client.on("interactionCreate", async (interaction) => {
+
+    if (!interaction.isChatInputCommand()) {
+        return;
+    }
+
+    const command = client.commands.get(
+        interaction.commandName
+    );
+
+    if (!command) {
+        return;
+    }
+
     try {
-        if (interaction.isButton()) {
-            const handled =
-                await musicCommands.handleMusicButton(interaction);
-
-            if (handled) return;
-        }
-
-        if (!interaction.isChatInputCommand()) return;
-
-        const command = client.commands.get(interaction.commandName);
-
-        if (!command) return;
-
         await command.execute(interaction);
 
     } catch (error) {
-        console.error("[Interaction]", error.message || error);
 
-        const message =
-            error.message === "Join a voice channel first."
-                ? "🔊 Join a voice channel first."
-                : "❌ Something went wrong. Please try again.";
+        console.error(
+            "❌ Command Execution Error:",
+            error
+        );
 
         try {
-            if (interaction.replied || interaction.deferred) {
+            if (
+                interaction.replied ||
+                interaction.deferred
+            ) {
                 await interaction.editReply({
-                    content: message,
-                    embeds: [],
-                    components: [],
+                    content: "❌ An error occurred while executing this command.",
                 });
+
             } else {
                 await interaction.reply({
-                    content: message,
+                    content: "❌ An error occurred while executing this command.",
                     ephemeral: true,
                 });
             }
-        } catch {
-            // Ignore reply errors if Discord interaction expired.
+
+        } catch (replyError) {
+            console.error(
+                "❌ Interaction Reply Error:",
+                replyError
+            );
         }
     }
 });
 
-// Process errors
-process.on("unhandledRejection", reason => {
-    const message = reason?.message || String(reason);
-    console.error("[Process] Unhandled rejection:", message);
+// ========================================
+// PROCESS ERROR MONITOR
+// ========================================
+
+process.on("unhandledRejection", (reason) => {
+    console.error(
+        "❌ Unhandled Promise Rejection:",
+        reason
+    );
 });
 
-process.on("uncaughtException", error => {
-    console.error("[Process] Uncaught exception:", error.message);
+process.on("uncaughtException", (error) => {
+    console.error(
+        "❌ Uncaught Exception:",
+        error
+    );
+
     process.exit(1);
 });
 
-// Graceful shutdown
+// ========================================
+// GRACEFUL SHUTDOWN
+// ========================================
+
 let isShuttingDown = false;
 
 async function shutdown(signal) {
+
     if (isShuttingDown) return;
 
     isShuttingDown = true;
 
-    console.log(`[Shutdown] ${signal} received.`);
+    console.log(
+        `🛑 ${signal} received. Shutting down BauaaCore...`
+    );
 
-    try {
-        const players = client.music?.players;
+    client.destroy();
 
-        if (players) {
-            for (const player of players.values()) {
-                try {
-                    await player.destroy();
-                } catch {
-                    // Continue shutdown.
-                }
-            }
-        }
-
-        client.destroy();
-
-        if (server.listening) {
-            await new Promise(resolve => server.close(resolve));
-        }
-
-        console.log("[Shutdown] Completed.");
-
-    } catch (error) {
-        console.error("[Shutdown]", error.message);
-    } finally {
-        process.exit(0);
+    if (server.listening) {
+        await new Promise((resolve) => {
+            server.close(resolve);
+        });
     }
+
+    console.log("✅ BauaaCore shutdown completed.");
+
+    process.exit(0);
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
-// Start bot
-async function start() {
-    ensureStore();
+// ========================================
+// DISCORD LOGIN
+// ========================================
 
-    client.music = createMusicManager(client);
+console.log("🚀 Starting BauaaCore...");
 
-    console.log("[Startup] Starting BauaaCore...");
+client.login(process.env.DISCORD_TOKEN)
+    .then(() => {
+        console.log("🔐 Discord login successful!");
+    })
+    .catch((error) => {
+        console.error(
+            "❌ Discord login failed:",
+            error
+        );
 
-    await client.login(process.env.DISCORD_TOKEN);
-}
-
-start().catch(error => {
-    console.error("[Startup] Failed:", error.message);
-    process.exit(1);
-});
+        process.exit(1);
+    });

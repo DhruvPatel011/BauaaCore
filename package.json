@@ -1,31 +1,22 @@
+
 {
   "name": "bauaacore",
-  "version": "2.0.0",
-  "description": "BauaaCore Discord Logging and Multi-Source Music Bot",
+  "version": "1.0.0",
+  "description": "BauaaCore Discord Logging Bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "start:docker": "bash start.sh",
-    "check": "node --check src/index.js && node --check src/commands/music/index.js && node --check src/music/manager.js"
+    "start": "node src/index.js"
   },
   "keywords": [
     "discord",
     "discord-bot",
-    "logging",
-    "music",
-    "lavalink",
-    "kazagumo"
+    "logging"
   ],
   "author": "Bauaa",
   "license": "ISC",
   "type": "commonjs",
-  "engines": {
-    "node": ">=22.0.0"
-  },
   "dependencies": {
     "discord.js": "^14.27.0",
-    "dotenv": "^18.0.6",
-    "kazagumo": "3.4.3",
-    "shoukaku": "^4.3.0"
+    "dotenv": "^18.0.6"
   }
 }
