@@ -1,0 +1,91 @@
+server:
+  port: 2333
+  address: 127.0.0.1
+  http2:
+    enabled: false
+
+lavalink:
+  server:
+    password: ${LAVALINK_PASSWORD:change-this-lavalink-password}
+    sources:
+      youtube: false
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      nico: false
+      http: true
+      local: false
+    filters:
+      volume: true
+      equalizer: true
+      karaoke: true
+      timescale: true
+      tremolo: true
+      vibrato: true
+      distortion: true
+      rotation: true
+      channelMix: true
+      lowPass: true
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    youtubePlaylistLoadLimit: 6
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
+      snapshot: false
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.8.3"
+      repository: "https://maven.lavalink.dev/releases"
+      snapshot: false
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+  lavasrc:
+    providers:
+      - "ytsearch:\"%ISRC%\""
+      - "ytsearch:%QUERY%"
+      - "scsearch:%QUERY%"
+    sources:
+      spotify: true
+      applemusic: ${APPLE_MUSIC_ENABLED:false}
+      deezer: ${DEEZER_ENABLED:false}
+      yandexmusic: false
+      flowerytts: false
+      youtube: false
+      vkmusic: false
+      tidal: false
+      qobuz: false
+      ytdlp: false
+      jiosaavn: false
+    spotify:
+      clientId: ${SPOTIFY_CLIENT_ID:}
+      clientSecret: ${SPOTIFY_CLIENT_SECRET:}
+      countryCode: "IN"
+      playlistLoadLimit: 3
+      albumLoadLimit: 3
+    applemusic:
+      mediaAPIToken: ${APPLE_MUSIC_API_TOKEN:}
+      countryCode: "IN"
+    deezer:
+      masterDecryptionKey: ${DEEZER_MASTER_KEY:}
+      arl: ${DEEZER_ARL:}
+
+logging:
+  level:
+    root: INFO
+    lavalink: INFO
+
+spring:
+  cloud:
+    config:
+      enabled: false
+      import-check:
+        enabled: false
