@@ -1,15 +1,7 @@
+
 require("dotenv").config();
 
 const http = require("http");
-
-const PORT = process.env.PORT || 10000;
-
-http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end("BauaaCore is online!");
-}).listen(PORT, "0.0.0.0", () => {
-    console.log(`🌐 HTTP server running on port ${PORT}`);
-});
 
 const {
     Client,
@@ -18,7 +10,15 @@ const {
     Partials,
 } = require("discord.js");
 
+// ========================================
+// COMMANDS
+// ========================================
+
 const setupLogsCommand = require("./commands/setupLogs");
+
+// ========================================
+// EVENTS
+// ========================================
 
 const messageDelete = require("./events/messageDelete");
 const messageDeleteBulk = require("./events/messageDeleteBulk");
@@ -41,10 +41,20 @@ const roleUpdate = require("./events/roleUpdate");
 
 const voiceStateUpdate = require("./events/voiceStateUpdate");
 
+// ========================================
+// CONFIGURATION
+// ========================================
 
-// ================================
-// CLIENT
-// ================================
+const PORT = Number(process.env.PORT) || 10000;
+
+if (!process.env.DISCORD_TOKEN) {
+    console.error("❌ DISCORD_TOKEN is missing!");
+    process.exit(1);
+}
+
+// ========================================
+// DISCORD CLIENT
+// ========================================
 
 const client = new Client({
     intents: [
@@ -61,9 +71,9 @@ const client = new Client({
     ],
 });
 
-// ================================
+// ========================================
 // COMMAND COLLECTION
-// ================================
+// ========================================
 
 client.commands = new Collection();
 
@@ -72,241 +82,205 @@ client.commands.set(
     setupLogsCommand
 );
 
+// ========================================
+// EVENT REGISTRATION HELPER
+// ========================================
 
-// ================================
-// MESSAGE DELETE LOGS
-// ================================
+function registerEvent(eventName, handler, logger = null) {
+    client.on(eventName, async (...args) => {
 
-client.on("messageDelete", async (message) => {
-    console.log("🔥 MESSAGE DELETE EVENT RECEIVED");
+        if (logger) {
+            try {
+                logger(...args);
+            } catch (error) {
+                console.error(
+                    `❌ ${eventName} log message error:`,
+                    error
+                );
+            }
+        }
 
-    try {
-        await messageDelete.execute(message);
-    } catch (error) {
-        console.error(
-            "❌ Message Delete Logger Error:",
-            error
+        try {
+            await handler.execute(...args);
+        } catch (error) {
+            console.error(
+                `❌ ${eventName} Logger Error:`,
+                error
+            );
+        }
+    });
+}
+
+// ========================================
+// MESSAGE LOGS
+// ========================================
+
+registerEvent(
+    "messageDelete",
+    messageDelete,
+    () => console.log("🔥 MESSAGE DELETE EVENT RECEIVED")
+);
+
+registerEvent(
+    "messageDeleteBulk",
+    messageDeleteBulk,
+    (messages) => {
+        console.log(
+            `🔥 BULK DELETE EVENT RECEIVED | ${messages.size} messages`
         );
     }
-});
+);
 
+registerEvent(
+    "messageUpdate",
+    messageUpdate
+);
 
-client.on("messageDeleteBulk", async (messages, channel) => {
-    console.log(
-        `🔥 BULK DELETE EVENT RECEIVED | ${messages.size} messages`
-    );
-
-    try {
-        await messageDeleteBulk.execute(
-            messages,
-            channel
-        );
-    } catch (error) {
-        console.error(
-            "❌ Bulk Message Delete Logger Error:",
-            error
-        );
-    }
-});
-
-
-client.on("messageUpdate", async (oldMessage, newMessage) => {
-    try {
-        await messageUpdate.execute(
-            oldMessage,
-            newMessage
-        );
-    } catch (error) {
-        console.error(
-            "❌ Message Update Logger Error:",
-            error
-        );
-    }
-});
-
-
-// ================================
+// ========================================
 // MEMBER LOGS
-// ================================
+// ========================================
 
-client.on("guildMemberAdd", async (member) => {
-    try {
-        await guildMemberAdd.execute(member);
-    } catch (error) {
-        console.error(
-            "❌ Member Join Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "guildMemberAdd",
+    guildMemberAdd
+);
 
+registerEvent(
+    "guildMemberRemove",
+    guildMemberRemove
+);
 
-client.on("guildMemberRemove", async (member) => {
-    try {
-        await guildMemberRemove.execute(member);
-    } catch (error) {
-        console.error(
-            "❌ Member Leave Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "guildMemberUpdate",
+    guildMemberUpdate
+);
 
-
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-    try {
-        await guildMemberUpdate.execute(
-            oldMember,
-            newMember
-        );
-    } catch (error) {
-        console.error(
-            "❌ Member Update Logger Error:",
-            error
-        );
-    }
-});
-
-
-// ================================
+// ========================================
 // BAN / UNBAN LOGS
-// ================================
+// ========================================
 
-client.on("guildBanAdd", async (ban) => {
-    console.log("🔨 BAN EVENT RECEIVED:", ban.user.tag);
-
-    try {
-        await guildBanAdd.execute(ban);
-    } catch (error) {
-        console.error("❌ Ban Logger Error:", error);
+registerEvent(
+    "guildBanAdd",
+    guildBanAdd,
+    (ban) => {
+        console.log(
+            "🔨 BAN EVENT RECEIVED:",
+            ban.user?.tag || "Unknown user"
+        );
     }
-});
+);
 
-client.on("guildBanRemove", async (ban) => {
-    console.log("🔓 UNBAN EVENT RECEIVED:", ban.user.tag);
-
-    try {
-        await guildBanRemove.execute(ban);
-    } catch (error) {
-        console.error("❌ Unban Logger Error:", error);
+registerEvent(
+    "guildBanRemove",
+    guildBanRemove,
+    (ban) => {
+        console.log(
+            "🔓 UNBAN EVENT RECEIVED:",
+            ban.user?.tag || "Unknown user"
+        );
     }
-});
+);
 
-// ================================
+// ========================================
 // CHANNEL LOGS
-// ================================
+// ========================================
 
-client.on("channelCreate", async (channel) => {
-    try {
-        await channelCreate.execute(channel);
-    } catch (error) {
-        console.error(
-            "❌ Channel Create Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "channelCreate",
+    channelCreate
+);
 
+registerEvent(
+    "channelDelete",
+    channelDelete
+);
 
-client.on("channelDelete", async (channel) => {
-    try {
-        await channelDelete.execute(channel);
-    } catch (error) {
-        console.error(
-            "❌ Channel Delete Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "channelUpdate",
+    channelUpdate
+);
 
-
-client.on("channelUpdate", async (oldChannel, newChannel) => {
-    try {
-        await channelUpdate.execute(
-            oldChannel,
-            newChannel
-        );
-    } catch (error) {
-        console.error(
-            "❌ Channel Update Logger Error:",
-            error
-        );
-    }
-});
-
-
-// ================================
+// ========================================
 // ROLE LOGS
-// ================================
+// ========================================
 
-client.on("roleCreate", async (role) => {
-    try {
-        await roleCreate.execute(role);
-    } catch (error) {
-        console.error(
-            "❌ Role Create Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "roleCreate",
+    roleCreate
+);
 
+registerEvent(
+    "roleDelete",
+    roleDelete
+);
 
-client.on("roleDelete", async (role) => {
-    try {
-        await roleDelete.execute(role);
-    } catch (error) {
-        console.error(
-            "❌ Role Delete Logger Error:",
-            error
-        );
-    }
-});
+registerEvent(
+    "roleUpdate",
+    roleUpdate
+);
 
-
-client.on("roleUpdate", async (oldRole, newRole) => {
-    try {
-        await roleUpdate.execute(
-            oldRole,
-            newRole
-        );
-    } catch (error) {
-        console.error(
-            "❌ Role Update Logger Error:",
-            error
-        );
-    }
-});
-
-
-// ================================
+// ========================================
 // VOICE LOGS
-// ================================
+// ========================================
 
-client.on("voiceStateUpdate", async (oldState, newState) => {
-    try {
-        await voiceStateUpdate.execute(
-            oldState,
-            newState
-        );
-    } catch (error) {
-        console.error(
-            "❌ Voice Logger Error:",
-            error
-        );
+registerEvent(
+    "voiceStateUpdate",
+    voiceStateUpdate
+);
+
+// ========================================
+// HTTP HEALTH SERVER
+// ========================================
+
+const server = http.createServer((req, res) => {
+
+    if (req.url === "/" || req.url === "/health") {
+
+        const discordConnected = client.isReady();
+
+        res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+        });
+
+        return res.end(JSON.stringify({
+            service: "BauaaCore",
+            status: "running",
+            discord: discordConnected
+                ? "connected"
+                : "disconnected",
+            uptime: Math.floor(process.uptime()),
+            timestamp: new Date().toISOString(),
+        }));
     }
+
+    res.writeHead(404, {
+        "Content-Type": "application/json",
+    });
+
+    res.end(JSON.stringify({
+        error: "Not Found",
+    }));
 });
 
+server.on("error", (error) => {
+    console.error("❌ HTTP SERVER ERROR:", error);
+    process.exit(1);
+});
 
-// ================================
+server.listen(PORT, "0.0.0.0", () => {
+    console.log(`🌐 HTTP server running on port ${PORT}`);
+});
+
+// ========================================
 // DISCORD CONNECTION MONITOR
-// ================================
+// ========================================
 
 client.on("shardDisconnect", (event, shardId) => {
-    console.log(
+    console.error(
         `🔴 Discord Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
     );
 });
-
 
 client.on("shardReconnecting", (shardId) => {
     console.log(
@@ -314,45 +288,47 @@ client.on("shardReconnecting", (shardId) => {
     );
 });
 
-
 client.on("shardResume", (shardId, replayedEvents) => {
     console.log(
         `🟢 Discord Gateway resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
     );
 });
 
-
-client.on("error", (error) => {
+client.on("shardError", (error, shardId) => {
     console.error(
-        "❌ Discord Client Error:",
+        `❌ Discord Shard Error | Shard: ${shardId}`,
         error
     );
 });
 
+client.on("error", (error) => {
+    console.error("❌ Discord Client Error:", error);
+});
 
-// ================================
+client.on("warn", (message) => {
+    console.warn("⚠️ Discord Warning:", message);
+});
+
+// ========================================
 // BOT READY
-// ================================
+// ========================================
 
 client.once("clientReady", async () => {
-    console.log(
-        `✅ ${client.user.tag} is online!`
-    );
+
+    console.log("----------------------------------");
+    console.log(`✅ ${client.user.tag} is ONLINE!`);
+    console.log(`🆔 Bot ID: ${client.user.id}`);
+    console.log(`🌐 Servers: ${client.guilds.cache.size}`);
+    console.log("----------------------------------");
 
     try {
         const commands = [
             ...client.commands.values(),
-        ].map(command =>
-            command.data.toJSON()
-        );
+        ].map(command => command.data.toJSON());
 
-        await client.application.commands.set(
-            commands
-        );
+        await client.application.commands.set(commands);
 
-        console.log(
-            "✅ Global application commands registered!"
-        );
+        console.log("✅ Global application commands registered!");
 
     } catch (error) {
         console.error(
@@ -362,12 +338,12 @@ client.once("clientReady", async () => {
     }
 });
 
-
-// ================================
+// ========================================
 // SLASH COMMANDS
-// ================================
+// ========================================
 
 client.on("interactionCreate", async (interaction) => {
+
     if (!interaction.isChatInputCommand()) {
         return;
     }
@@ -384,6 +360,7 @@ client.on("interactionCreate", async (interaction) => {
         await command.execute(interaction);
 
     } catch (error) {
+
         console.error(
             "❌ Command Execution Error:",
             error
@@ -394,16 +371,17 @@ client.on("interactionCreate", async (interaction) => {
                 interaction.replied ||
                 interaction.deferred
             ) {
-                await interaction.editReply(
-                    "❌ An error occurred while executing this command."
-                );
+                await interaction.editReply({
+                    content: "❌ An error occurred while executing this command.",
+                });
+
             } else {
                 await interaction.reply({
-                    content:
-                        "❌ An error occurred while executing this command.",
+                    content: "❌ An error occurred while executing this command.",
                     ephemeral: true,
                 });
             }
+
         } catch (replyError) {
             console.error(
                 "❌ Interaction Reply Error:",
@@ -413,9 +391,73 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
+// ========================================
+// PROCESS ERROR MONITOR
+// ========================================
 
-// ================================
-// LOGIN
-// ================================
+process.on("unhandledRejection", (reason) => {
+    console.error(
+        "❌ Unhandled Promise Rejection:",
+        reason
+    );
+});
 
-client.login(process.env.DISCORD_TOKEN);
+process.on("uncaughtException", (error) => {
+    console.error(
+        "❌ Uncaught Exception:",
+        error
+    );
+
+    // Exit so the hosting platform can restart
+    // the process instead of continuing in an
+    // unknown application state.
+
+    process.exit(1);
+});
+
+// ========================================
+// GRACEFUL SHUTDOWN
+// ========================================
+
+let isShuttingDown = false;
+
+
+let isShuttingDown = false;
+
+async function shutdown(signal) {
+    if (isShuttingDown) return;
+
+    isShuttingDown = true;
+
+    console.log(`🛑 ${signal} received. Shutting down BauaaCore...`);
+
+    client.destroy();
+
+    if (server.listening) {
+        await new Promise((resolve) => {
+            server.close(resolve);
+        });
+    }
+
+    console.log("✅ BauaaCore shutdown completed.");
+    process.exit(0);
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+
+// ========================================
+// DISCORD LOGIN
+// ========================================
+
+console.log("🚀 Starting BauaaCore...");
+
+client.login(process.env.DISCORD_TOKEN)
+    .then(() => {
+        console.log("🔐 Discord login successful!");
+    })
+    .catch((error) => {
+        console.error("❌ Discord login failed:", error);
+        process.exit(1);
+    });
