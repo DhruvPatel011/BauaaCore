@@ -26,6 +26,12 @@ if (!process.env.DISCORD_TOKEN) {
 // ========================================
 
 const setupLogsCommand = require("./commands/setupLogs");
+const ignoreCommand = require("./commands/ignore");
+const {
+    connectDatabase,
+    closeDatabase,
+} = require("./config/database");
+const { isIgnored } = require("./utils/ignoreManager");
 
 // ========================================
 // LOGGING EVENTS
@@ -85,12 +91,82 @@ client.commands.set(
     setupLogsCommand
 );
 
+client.commands.set(
+    ignoreCommand.data.name,
+    ignoreCommand
+);
+
 // ========================================
 // EVENT REGISTRATION
 // ========================================
 
+// Check IDs associated with an event before allowing any log handler to run.
+// This prevents ignored users, bots and webhooks from reaching both detailed
+// log channels and the all-logs summary.
+async function shouldSkipIgnoredEvent(eventName, args) {
+    const candidates = new Set();
+
+    const add = (value) => {
+        if (typeof value === "string" && /^\\d{17,20}$/.test(value)) {
+            candidates.add(value);
+        }
+    };
+
+    const addMessage = (message) => {
+        if (!message) return;
+        add(message.webhookId);
+        add(message.author?.id);
+        add(message.user?.id);
+        add(message.member?.id);
+    };
+
+    const first = args[0];
+
+    if (eventName === "messageDelete" || eventName === "messageUpdate") {
+        addMessage(eventName === "messageUpdate" ? args[1] : first);
+        addMessage(first);
+    } else if (eventName === "messageDeleteBulk") {
+        for (const message of first?.values?.() || []) addMessage(message);
+    } else if (eventName.startsWith("guildMember")) {
+        add(first?.id);
+        add(first?.user?.id);
+    } else if (eventName.startsWith("guildBan")) {
+        add(first?.user?.id);
+    } else if (eventName === "voiceStateUpdate") {
+        add(args[0]?.id);
+        add(args[0]?.member?.id);
+        add(args[0]?.member?.user?.id);
+        add(args[1]?.id);
+        add(args[1]?.member?.id);
+        add(args[1]?.member?.user?.id);
+    }
+
+    const guild =
+        first?.guild ||
+        first?.member?.guild ||
+        args[1]?.guild ||
+        args[1]?.member?.guild;
+
+    if (!guild || candidates.size === 0) return false;
+
+    for (const id of candidates) {
+        if (await isIgnored(guild.id, id)) {
+            console.log(`⏭️ Ignored ${eventName} log for ID ${id}`);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function registerEvent(eventName, handler, logger = null) {
     client.on(eventName, async (...args) => {
+
+        try {
+            if (await shouldSkipIgnoredEvent(eventName, args)) return;
+        } catch (error) {
+            console.error(`❌ Ignore check failed for ${eventName}:`, error);
+        }
 
         if (logger) {
             try {
@@ -500,9 +576,12 @@ async function shutdown(signal) {
         `🛑 ${signal} received. Shutting down BauaaCore...`
     );
 
-    // Disconnect Discord client.
+    // Disconnect Discord client and close MongoDB.
 
     client.destroy();
+    await closeDatabase().catch((error) => {
+        console.error("❌ MongoDB shutdown error:", error);
+    });
 
     // Close HTTP server.
 
@@ -526,15 +605,16 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 console.log("🚀 Starting BauaaCore...");
 
-client.login(process.env.DISCORD_TOKEN)
-    .then(() => {
+async function startBot() {
+    try {
+        await connectDatabase();
+        await client.login(process.env.DISCORD_TOKEN);
         console.log("🔐 Discord login successful!");
-    })
-    .catch((error) => {
-        console.error(
-            "❌ Discord login failed:",
-            error
-        );
-
+    } catch (error) {
+        console.error("❌ Startup failed:", error);
+        await closeDatabase().catch(() => {});
         process.exit(1);
-    });
+    }
+}
+
+startBot();
