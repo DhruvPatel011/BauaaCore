@@ -129,21 +129,64 @@ module.exports = {
 
                 if (!records.length) {
                     return interaction.editReply(
-                        "📭 No IDs are currently ignored."
+                        "📭 No IDs are currently ignored in this server."
                     );
                 }
 
-                const lines = records.slice(0, 40).map(
-                    (record, index) =>
-                        `**${index + 1}. ${record.type.toUpperCase()}** — \`${record.id}\``
+                // Fetch webhook names once
+                let webhooks = new Map();
+
+                if (records.some(record => record.type === "webhook")) {
+                    try {
+                        const fetchedWebhooks = await interaction.guild.fetchWebhooks();
+
+                        webhooks = new Map(
+                            fetchedWebhooks.map(webhook => [webhook.id, webhook.name])
+                        );
+                    } catch (error) {
+                        console.error("Webhook fetch error:", error.message);
+                    }
+                }
+
+                const visibleRecords = records.slice(0, 40);
+
+                const lines = await Promise.all(
+                    visibleRecords.map(async (record, index) => {
+                        let name = "Unknown User";
+
+                        if (record.type === "user" || record.type === "bot") {
+                            try {
+                                const user = await interaction.client.users.fetch(
+                                    record.id
+                                );
+
+                                name = user.globalName || user.username;
+                            } catch {
+                                name = "Unknown User";
+                            }
+                        }
+
+                        if (record.type === "webhook") {
+                            name = webhooks.get(record.id) || "Unknown Webhook";
+                        }
+
+                        return (
+                            `**${index + 1}. ${record.type.toUpperCase()}**\n` +
+                            `👤 **Name:** ${name}\n` +
+                            `🆔 **ID:** \`${record.id}\``
+                        );
+                    })
                 );
 
-                if (records.length > 40) {
-                    lines.push(`…and ${records.length - 40} more.`);
+                const remaining = records.length - visibleRecords.length;
+
+                if (remaining > 0) {
+                    lines.push(`…and ${remaining} more.`);
                 }
 
                 return interaction.editReply(
-                    `**🚫 BauaaCore Ignore List (${records.length})**\n\n${lines.join("\n")}`
+                    `**🚫 BauaaCore Ignore List (${records.length})**\n\n` +
+                    lines.join("\n\n")
                 );
             }
         } catch (error) {
