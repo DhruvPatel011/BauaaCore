@@ -1,96 +1,92 @@
 
-let aiClient = null;
+const Groq = require("groq-sdk");
 
-async function getGeminiClient() {
-    const apiKey = process.env.GEMINI_API_KEY;
+let groqClient = null;
+
+function getGroqClient() {
+    const apiKey = process.env.GROQ_API_KEY;
 
     if (!apiKey || !apiKey.trim()) {
-        throw new Error("GEMINI_API_KEY is missing.");
+        const error = new Error("GROQ_API_KEY is missing. Add it to Render Environment Variables.");
+        error.code = "MISSING_GROQ_API_KEY";
+        throw error;
     }
 
-    if (!aiClient) {
-        const { GoogleGenAI } = await import("@google/genai");
-
-        aiClient = new GoogleGenAI({
+    if (!groqClient) {
+        groqClient = new Groq({
             apiKey: apiKey.trim(),
-            httpOptions: {
-                timeout: 60000,
-            },
+            timeout: 60000,
+            maxRetries: 0,
         });
 
-        console.log("✨ Gemini Client Initialized Successfully!");
+        console.log("Groq AI Client Initialized Successfully!");
     }
 
-    return aiClient;
+    return groqClient;
 }
 
-function isCancelled(signal) {
-    return Boolean(signal?.aborted);
+function getErrorStatus(error) {
+    return Number(error?.status || error?.response?.status || 0);
+}
+
+function createProviderError(error) {
+    const status = getErrorStatus(error);
+    const message = String(error?.message || "Unknown Groq API error");
+
+    const wrapped = new Error(message);
+    wrapped.name = error?.name || "GroqAPIError";
+    wrapped.status = status;
+    wrapped.originalError = error;
+
+    if (status === 401 || status === 403) {
+        wrapped.code = "GROQ_AUTH_ERROR";
+        wrapped.message = "Groq API key invalid or access denied. Check GROQ_API_KEY.";
+    } else if (status === 429) {
+        wrapped.code = "GROQ_RATE_LIMIT";
+        wrapped.message = "Groq rate limit or free-tier quota reached. Please try again later.";
+    } else if (status === 400) {
+        wrapped.code = "GROQ_BAD_REQUEST";
+        wrapped.message = "Groq rejected the request. Check the model and message format.";
+    } else if (status >= 500) {
+        wrapped.code = "GROQ_SERVER_ERROR";
+        wrapped.message = "Groq service is temporarily unavailable. Please try again.";
+    }
+
+    return wrapped;
 }
 
 function makeAbortError() {
-    const error = new Error("Gemini request cancelled.");
+    const error = new Error("AI request cancelled.");
     error.name = "AbortError";
+    error.code = "REQUEST_CANCELLED";
     return error;
 }
 
-function wait(ms, signal) {
-    return new Promise((resolve, reject) => {
-        if (isCancelled(signal)) {
-            reject(makeAbortError());
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            cleanup();
-            resolve();
-        }, ms);
-
-        function onAbort() {
-            clearTimeout(timer);
-            cleanup();
-            reject(makeAbortError());
-        }
-
-        function cleanup() {
-            signal?.removeEventListener("abort", onAbort);
-        }
-
-        signal?.addEventListener("abort", onAbort, {
-            once: true,
-        });
-    });
-}
-
-// Detect permanent daily quota exhaustion.
-function isDailyQuotaError(error) {
-    const message = String(error?.message || "").toLowerCase();
-
-    return (
-        message.includes("generate_content_free_tier_requests") ||
-        message.includes("free_tier_requests") ||
-        (
-            message.includes("quota exceeded") &&
-            message.includes("free tier")
-        )
+function isAbortError(error, signal) {
+    return Boolean(
+        signal?.aborted ||
+        error?.name === "AbortError" ||
+        error?.code === "ABORT_ERR"
     );
 }
 
-// Convert quota error into a clear application error.
-function createQuotaError(originalError) {
-    const error = new Error(
-        "Gemini daily free-tier quota exhausted. Please wait for quota reset or upgrade the API project billing tier."
-    );
+function normalizeHistory(history) {
+    if (!Array.isArray(history)) return [];
 
-    error.name = "GeminiQuotaError";
-    error.code = "DAILY_QUOTA_EXHAUSTED";
-    error.status = 429;
-    error.originalError = originalError;
-
-    return error;
+    return history
+        .filter((item) => item && Array.isArray(item.parts))
+        .map((item) => ({
+            role: item.role === "model" || item.role === "assistant"
+                ? "assistant"
+                : "user",
+            content: item.parts
+                .map((part) => typeof part?.text === "string" ? part.text : "")
+                .join("")
+                .trim(),
+        }))
+        .filter((item) => item.content.length > 0);
 }
 
-// Generate response with streaming.
 async function generateAIResponseStream({
     history = [],
     message,
@@ -98,135 +94,87 @@ async function generateAIResponseStream({
     onText,
     signal,
 }) {
-    if (!message || typeof message !== "string") {
+    if (!message || typeof message !== "string" || !message.trim()) {
         throw new Error("A valid user message is required.");
     }
 
-    if (isCancelled(signal)) {
-        throw makeAbortError();
-    }
+    if (signal?.aborted) throw makeAbortError();
 
-    const ai = await getGeminiClient();
+    const client = getGroqClient();
+    const model = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 
-    const model =
-        process.env.GEMINI_MODEL || "gemini-flash-latest";
+    const messages = [
+        {
+            role: "system",
+            content: systemPrompt || "You are a helpful, multilingual Discord AI assistant.",
+        },
+        ...normalizeHistory(history),
+        {
+            role: "user",
+            content: message.trim(),
+        },
+    ];
 
-    const maxAttempts = 3;
+    try {
+        console.log(`Groq AI Request | Model: ${model}`);
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            if (isCancelled(signal)) {
-                throw makeAbortError();
-            }
-
-            console.log(
-                `🚀 Gemini Request | Model: ${model} | Attempt: ${attempt}/${maxAttempts}`
-            );
-
-            const chat = ai.chats.create({
+        const stream = await client.chat.completions.create(
+            {
                 model,
-                history,
-                config: {
-                    systemInstruction: systemPrompt,
-                    temperature: 0.8,
-                    maxOutputTokens: 2048,
-                    abortSignal: signal,
-                },
-            });
-
-            const stream = await chat.sendMessageStream({
-                message,
-            });
-
-            let fullResponse = "";
-
-            for await (const chunk of stream) {
-                if (isCancelled(signal)) {
-                    throw makeAbortError();
-                }
-
-                const chunkText = chunk.text || "";
-
-                if (!chunkText) continue;
-
-                fullResponse += chunkText;
-
-                // Optional streaming callback.
-                // messageCreate can omit this to display only
-                // the final complete answer.
-                if (typeof onText === "function") {
-                    await onText(fullResponse);
-                }
+                messages,
+                temperature: 0.7,
+                max_completion_tokens: 2048,
+                stream: true,
+            },
+            {
+                signal,
             }
+        );
 
-            if (!fullResponse.trim()) {
-                throw new Error("Gemini returned an empty response.");
+        let fullResponse = "";
+
+        for await (const chunk of stream) {
+            if (signal?.aborted) throw makeAbortError();
+
+            const text = chunk.choices?.[0]?.delta?.content;
+
+            if (typeof text !== "string" || !text) continue;
+
+            fullResponse += text;
+
+            if (typeof onText === "function") {
+                await onText(fullResponse);
             }
-
-            console.log("✅ Gemini Response Generated Successfully!");
-
-            return fullResponse.trim();
-
-        } catch (error) {
-            if (
-                isCancelled(signal) ||
-                error?.name === "AbortError"
-            ) {
-                console.log("⏭️ Gemini request cancelled.");
-                throw error;
-            }
-
-            const status = Number(
-                error?.status || error?.code || 0
-            );
-
-            // Daily quota cannot be fixed by retrying.
-            if (status === 429 && isDailyQuotaError(error)) {
-                console.error(
-                    "🛑 Gemini daily free-tier quota exhausted."
-                );
-
-                throw createQuotaError(error);
-            }
-
-            console.error("❌ Gemini API Error:", {
-                attempt,
-                status,
-                name: error?.name,
-                message: String(error?.message || "").slice(0, 1500),
-            });
-
-            // Retry only potentially temporary errors.
-            const retryableStatuses = [
-                408,
-                429,
-                500,
-                502,
-                503,
-                504,
-            ];
-
-            if (
-                !retryableStatuses.includes(status) ||
-                attempt === maxAttempts
-            ) {
-                throw error;
-            }
-
-            const delay = 1000 * Math.pow(2, attempt - 1);
-
-            console.log(
-                `⏳ Temporary API error. Retrying in ${delay}ms...`
-            );
-
-            await wait(delay, signal);
         }
-    }
 
-    throw new Error("Gemini request failed.");
+        if (!fullResponse.trim()) {
+            throw new Error("Groq returned an empty response.");
+        }
+
+        console.log("Groq AI Response Generated Successfully!");
+
+        return fullResponse.trim();
+
+    } catch (error) {
+        if (isAbortError(error, signal)) {
+            throw makeAbortError();
+        }
+
+        const wrappedError = createProviderError(error);
+
+        console.error("Groq API Error:", {
+            status: wrappedError.status || "Unknown",
+            code: wrappedError.code || "UNKNOWN",
+            message: wrappedError.message,
+        });
+
+        throw wrappedError;
+    }
 }
 
 module.exports = {
-    getGeminiClient,
+    getGroqClient,
+    // Backward-compatible alias if any old file still imports this name.
+    getGeminiClient: getGroqClient,
     generateAIResponseStream,
 };
