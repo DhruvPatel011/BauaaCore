@@ -5,34 +5,23 @@ async function getGeminiClient() {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey || !apiKey.trim()) {
-        throw new Error("GEMINI_API_KEY is missing from .env");
+        throw new Error("GEMINI_API_KEY is missing from environment variables.");
     }
 
     if (!aiClient) {
-        try {
-            const { GoogleGenAI } = await import("@google/genai");
+        const { GoogleGenAI } = await import("@google/genai");
 
-            aiClient = new GoogleGenAI({
-                apiKey: apiKey.trim(),
-            });
+        aiClient = new GoogleGenAI({
+            apiKey: apiKey.trim(),
+            httpOptions: {
+                timeout: 30000,
+            },
+        });
 
-            console.log("✨ Gemini AI Client Initialized Successfully!");
-
-        } catch (error) {
-            console.error("❌ Gemini SDK Initialization Failed:", error.message);
-            throw error;
-        }
+        console.log("✨ Gemini AI Client Initialized Successfully!");
     }
 
     return aiClient;
-}
-
-function getSafeErrorDetails(error) {
-    return {
-        name: error?.name || "UnknownError",
-        message: error?.message || "Unknown Gemini API error",
-        status: error?.status || error?.code || "Unknown",
-    };
 }
 
 async function generateAIResponse({
@@ -44,11 +33,12 @@ async function generateAIResponse({
         throw new Error("A valid user message is required.");
     }
 
-    const ai = await getGeminiClient();
-
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
-
     try {
+        const ai = await getGeminiClient();
+        const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+
+        console.log(`🚀 Gemini Request Started | Model: ${model}`);
+
         const chat = ai.chats.create({
             model,
             history,
@@ -59,34 +49,30 @@ async function generateAIResponse({
             },
         });
 
-        console.log(`🧠 Gemini Request | Model: ${model}`);
-
         const response = await chat.sendMessage({
             message,
         });
 
-        const text = response.text?.trim();
+        const aiText = response.text?.trim();
 
-        if (!text) {
-            const finishReason =
-                response.candidates?.[0]?.finishReason || "Unknown";
-
-            const blockReason =
-                response.promptFeedback?.blockReason || "None";
-
+        if (!aiText) {
             throw new Error(
-                `Gemini returned an empty response. Finish reason: ${finishReason}. Block reason: ${blockReason}.`
+                `Empty Gemini response. Finish reason: ${
+                    response.candidates?.[0]?.finishReason || "Unknown"
+                }`
             );
         }
 
-        console.log("✨ Gemini Response Generated Successfully!");
+        console.log("✅ Gemini Response Generated Successfully!");
 
-        return text;
+        return aiText;
 
     } catch (error) {
-        const details = getSafeErrorDetails(error);
-
-        console.error("❌ Gemini API Request Failed:", details);
+        console.error("❌ Gemini API Error:", {
+            name: error?.name,
+            message: error?.message,
+            status: error?.status || error?.code || "Unknown",
+        });
 
         throw error;
     }
