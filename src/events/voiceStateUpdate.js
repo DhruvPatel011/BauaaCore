@@ -2,6 +2,7 @@
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
 const { getDatabase } = require("../config/database");
+const { isIgnored } = require("../utils/ignoreManager");
 
 // ========================================
 // TIME HELPERS
@@ -101,6 +102,13 @@ module.exports = {
         if (!member || !member.user) return;
 
         const user = member.user;
+
+                // Suppress every supported voice log for ignored IDs
+        if (await isIgnored(guild.id, user.id)) {
+            console.log(`⏭️ Voice logs ignored for $DIL2`);
+            return;
+        }
+
 
         const oldChannel = oldState.channel;
         const newChannel = newState.channel;
@@ -521,3 +529,5 @@ module.exports = {
         }
     },
 };
+
+

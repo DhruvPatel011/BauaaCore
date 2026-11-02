@@ -2,12 +2,18 @@
 const { EmbedBuilder, AuditLogEvent } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
 const { channels } = require("../config/logs");
+const { isIgnored } = require("../utils/ignoreManager");
 
 module.exports = {
     name: "guildBanAdd",
 
     async execute(ban) {
         const guild = ban.guild;
+
+        if (await isIgnored(guild.id, ban.user.id)) {
+    console.log(`⏭️ Ban log ignored for $DIL3`);
+    return;
+}
 
         const logChannel = guild.channels.cache.find(
             channel => channel.name === channels.moderation

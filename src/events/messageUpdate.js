@@ -76,6 +76,9 @@ module.exports = {
                 `👤 **User**\n${newMessage.author}\n\n` +
                 `📍 **Channel**\n${newMessage.channel}`,
             color: 0xF1C40F,
+
+            ignoredUserId: newMessage.author?.id,
+            ignoredWebhookId: newMessage.webhookId,
         });
 
         console.log("✅ Edited message logs sent!");
