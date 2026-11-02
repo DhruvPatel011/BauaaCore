@@ -16,21 +16,16 @@ const {
     buildSystemPrompt,
 } = require("../ai/prompt");
 
-// Discord message limit safety margin.
 const MAX_MESSAGE_LENGTH = 1900;
-
-// Maximum user input length.
 const MAX_INPUT_LENGTH = 12000;
 
-// Store active AI requests separately for each user.
+// Track the latest active request for each user/server.
 const activeRequests = new Map();
 
-// Generate unique request key.
 function getRequestKey(guildId, userId) {
     return `${guildId}:${userId}`;
 }
 
-// Check whether a request is still the latest request.
 function isCurrentRequest(key, request) {
     return (
         activeRequests.get(key) === request &&
@@ -38,7 +33,7 @@ function isCurrentRequest(key, request) {
     );
 }
 
-// Split long AI responses into Discord-safe messages.
+// Split long responses to respect Discord's message limit.
 function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
     const chunks = [];
     let remaining = text.trim();
@@ -54,10 +49,7 @@ function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
             splitAt = maxLength;
         }
 
-        chunks.push(
-            remaining.slice(0, splitAt).trim()
-        );
-
+        chunks.push(remaining.slice(0, splitAt).trim());
         remaining = remaining.slice(splitAt).trim();
     }
 
@@ -68,7 +60,7 @@ function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
     return chunks;
 }
 
-// Safely edit the original Discord reply.
+// Safely edit the original reply.
 async function safeEdit(replyMessage, content) {
     try {
         await replyMessage.edit({
@@ -79,7 +71,6 @@ async function safeEdit(replyMessage, content) {
         });
 
         return true;
-
     } catch (error) {
         console.error(
             "❌ Discord Message Edit Error:",
@@ -90,40 +81,58 @@ async function safeEdit(replyMessage, content) {
     }
 }
 
-// Process the AI request.
+// Process one AI request.
 async function processAIMessage({
     message,
     replyMessage,
     userMessage,
-    config,
     request,
     requestKey,
 }) {
     const signal = request.controller.signal;
 
     try {
-        if (!isCurrentRequest(requestKey, request)) {
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        // Fetch the latest server configuration.
+        const config = await getAIConfig(message.guild.id);
+
+        if (!config.enabled) {
+            await safeEdit(
+                replyMessage,
+                "⚠️ AI is currently disabled on this server."
+            );
             return;
         }
 
-        // Fetch user's conversation history.
+        if (!config.channels?.includes(message.channel.id)) {
+            await safeEdit(
+                replyMessage,
+                "⚠️ This channel is not configured for AI."
+            );
+            return;
+        }
+
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        // Get the user's conversation history.
         const history = getConversation(
             message.guild.id,
             message.author.id
         );
 
-        // Build personality and multilingual instructions.
+        // Build the current server mood and language instructions.
         const systemPrompt = buildSystemPrompt(config.mood);
 
         console.log(
-            `🧠 AI Processing | Server: ${message.guild.name} | User: ${message.author.tag}`
+            `🧠 AI Processing | Server: ${message.guild.name} | User: ${message.author.tag} | Mood: ${config.mood}`
         );
 
-        // Show typing indicator while AI generates.
+        // Display typing indicator.
         await message.channel.sendTyping().catch(() => {});
 
-        // Generate complete answer.
-        // Do not send partial text to Discord.
+        // Generate the complete answer.
+        // No partial response is displayed in Discord.
         const aiResponse = await generateAIResponseStream({
             history,
             message: userMessage,
@@ -131,18 +140,14 @@ async function processAIMessage({
             signal,
         });
 
-        // Ignore outdated or cancelled requests.
-        if (!isCurrentRequest(requestKey, request)) {
-            return;
-        }
+        // Ignore cancelled or outdated responses.
+        if (!isCurrentRequest(requestKey, request)) return;
 
         if (!aiResponse || !aiResponse.trim()) {
-            throw new Error(
-                "Gemini returned an empty response."
-            );
+            throw new Error("Gemini returned an empty response.");
         }
 
-        // Save only completed conversations.
+        // Save only successfully generated conversations.
         saveConversation(
             message.guild.id,
             message.author.id,
@@ -150,30 +155,21 @@ async function processAIMessage({
             aiResponse
         );
 
-        // Split response if it exceeds Discord's limit.
         const chunks = splitMessage(aiResponse);
 
-        if (!isCurrentRequest(requestKey, request)) {
-            return;
-        }
+        if (!isCurrentRequest(requestKey, request)) return;
 
-        // Display the complete final answer only once.
-        const firstChunk = chunks[0] || "No response generated.";
-
+        // Send the complete final response in the original reply.
         const editSuccess = await safeEdit(
             replyMessage,
-            firstChunk
+            chunks[0] || "No response generated."
         );
 
-        if (!editSuccess) {
-            return;
-        }
+        if (!editSuccess) return;
 
-        // Send remaining chunks if required.
+        // Send additional parts if required.
         for (let i = 1; i < chunks.length; i++) {
-            if (!isCurrentRequest(requestKey, request)) {
-                return;
-            }
+            if (!isCurrentRequest(requestKey, request)) return;
 
             await message.channel.send({
                 content: chunks[i],
@@ -196,13 +192,10 @@ async function processAIMessage({
             console.log(
                 `⏭️ AI Request Cancelled | User: ${message.author.tag}`
             );
-
             return;
         }
 
-        if (!isCurrentRequest(requestKey, request)) {
-            return;
-        }
+        if (!isCurrentRequest(requestKey, request)) return;
 
         console.error("❌ AI Message Handler Error:", {
             name: error?.name,
@@ -210,14 +203,34 @@ async function processAIMessage({
             status: error?.status || error?.code || "Unknown",
         });
 
-        // Update the placeholder with an error.
+        // Handle exhausted Gemini daily quota.
+        if (error?.code === "DAILY_QUOTA_EXHAUSTED") {
+            await safeEdit(
+                replyMessage,
+                "⚠️ Gemini AI ka daily free quota complete ho gaya hai. Quota reset hone ka wait karo ya API billing upgrade karo."
+            );
+
+            return;
+        }
+
+        // Handle temporary rate limits separately.
+        if (Number(error?.status || error?.code) === 429) {
+            await safeEdit(
+                replyMessage,
+                "⚠️ Gemini API rate limit reached. Please thodi der baad try karo."
+            );
+
+            return;
+        }
+
+        // Generic error.
         await safeEdit(
             replyMessage,
             "⚠️ AI response generate nahi ho paya. Please try again."
         );
 
     } finally {
-        // Remove only this request.
+        // Delete only the current request.
         if (activeRequests.get(requestKey) === request) {
             activeRequests.delete(requestKey);
         }
@@ -240,11 +253,9 @@ module.exports = {
 
             const userMessage = message.content?.trim();
 
-            if (!userMessage) {
-                return;
-            }
+            if (!userMessage) return;
 
-            // Validate input length.
+            // Validate message length.
             if (userMessage.length > MAX_INPUT_LENGTH) {
                 await message.reply({
                     content:
@@ -258,14 +269,12 @@ module.exports = {
                 return;
             }
 
-            // Get server AI configuration.
+            // Get server configuration.
             const config = await getAIConfig(message.guild.id);
 
-            if (!config.enabled) {
-                return;
-            }
+            if (!config.enabled) return;
 
-            // Only configured AI channels.
+            // Respond only in configured AI channels.
             if (!config.channels?.includes(message.channel.id)) {
                 return;
             }
@@ -275,13 +284,12 @@ module.exports = {
                 message.author.id
             );
 
-            // Cancel previous request from this user.
+            // Cancel the previous request from this user.
             const previousRequest = activeRequests.get(requestKey);
 
             if (previousRequest) {
                 previousRequest.controller.abort();
 
-                // Mark old placeholder as cancelled.
                 if (previousRequest.replyMessage) {
                     await safeEdit(
                         previousRequest.replyMessage,
@@ -290,7 +298,7 @@ module.exports = {
                 }
             }
 
-            // Create new request controller.
+            // Create a new request.
             const request = {
                 controller: new AbortController(),
                 replyMessage: null,
@@ -298,7 +306,7 @@ module.exports = {
 
             activeRequests.set(requestKey, request);
 
-            // Immediately create a reply under this message.
+            // Immediately create a separate reply.
             const replyMessage = await message.reply({
                 content: "💭 Thinking...",
                 allowedMentions: {
@@ -309,7 +317,7 @@ module.exports = {
 
             request.replyMessage = replyMessage;
 
-            // Ensure this request is still the latest.
+            // A newer request may have arrived during reply creation.
             if (!isCurrentRequest(requestKey, request)) {
                 await safeEdit(
                     replyMessage,
@@ -324,7 +332,6 @@ module.exports = {
                 message,
                 replyMessage,
                 userMessage,
-                config,
                 request,
                 requestKey,
             });
