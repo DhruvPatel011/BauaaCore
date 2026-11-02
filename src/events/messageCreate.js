@@ -16,27 +16,67 @@ const {
     buildSystemPrompt,
 } = require("../ai/prompt");
 
-const MAX_MESSAGE_LENGTH = 1900;
-const MAX_INPUT_LENGTH = 12000;
-
-// Track the latest active request for each user/server.
+// Active requests: one request per user per server.
 const activeRequests = new Map();
+
+const MAX_MESSAGE_LENGTH = 12000;
+const MAX_DISCORD_MESSAGE_LENGTH = 1900;
+
+// --------------------------------------------------
+// REQUEST HELPERS
+// --------------------------------------------------
 
 function getRequestKey(guildId, userId) {
     return `${guildId}:${userId}`;
 }
 
-function isCurrentRequest(key, request) {
-    return (
-        activeRequests.get(key) === request &&
-        !request.controller.signal.aborted
-    );
+function isCurrentRequest(requestKey, request) {
+    return activeRequests.get(requestKey) === request;
 }
 
-// Split long responses to respect Discord's message limit.
-function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
+function safeErrorLog(error) {
+    console.error("AI Message Handler Error:", {
+        name: error?.name || "Error",
+        code: error?.code || "Unknown",
+        status: error?.status || "Unknown",
+        message: String(error?.message || "Unknown error").slice(0, 1500),
+    });
+}
+
+async function safeDelete(message) {
+    try {
+        if (message?.deletable) {
+            await message.delete();
+        }
+    } catch {
+        // Ignore Discord deletion errors.
+    }
+}
+
+async function safeEdit(message, content) {
+    try {
+        if (message?.editable) {
+            return await message.edit({
+                content,
+                allowedMentions: {
+                    parse: [],
+                },
+            });
+        }
+    } catch (error) {
+        console.error("AI Reply Edit Error:", error.message);
+    }
+
+    return null;
+}
+
+// --------------------------------------------------
+// DISCORD MESSAGE CHUNKING
+// --------------------------------------------------
+
+function splitMessage(content, maxLength = MAX_DISCORD_MESSAGE_LENGTH) {
     const chunks = [];
-    let remaining = text.trim();
+    let remaining = String(content || "").trim();
 
     while (remaining.length > maxLength) {
         let splitAt = remaining.lastIndexOf("\n", maxLength);
@@ -50,38 +90,90 @@ function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
         }
 
         chunks.push(remaining.slice(0, splitAt).trim());
+
         remaining = remaining.slice(splitAt).trim();
     }
 
-    if (remaining.length > 0) {
+    if (remaining) {
         chunks.push(remaining);
     }
 
     return chunks;
 }
 
-// Safely edit the original reply.
-async function safeEdit(replyMessage, content) {
-    try {
-        await replyMessage.edit({
-            content,
-            allowedMentions: {
-                parse: [],
-            },
+async function sendAIResponse(replyMessage, channel, response, requestKey, request) {
+    const chunks = splitMessage(response);
+
+    if (!chunks.length) {
+        await safeEdit(replyMessage, "I couldn't generate a response. Please try again.");
+        return;
+    }
+
+    if (!isCurrentRequest(requestKey, request)) return;
+
+    // Edit the original Thinking message.
+    const firstChunk = await safeEdit(replyMessage, chunks[0]);
+
+    if (!firstChunk) {
+        await safeDelete(replyMessage);
+
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        await channel.send({
+            content: chunks[0],
+            allowedMentions: { parse: [] },
         });
+    }
 
-        return true;
-    } catch (error) {
-        console.error(
-            "❌ Discord Message Edit Error:",
-            error.message
-        );
+    // Send remaining chunks separately.
+    for (let i = 1; i < chunks.length; i++) {
+        if (!isCurrentRequest(requestKey, request)) return;
 
-        return false;
+        await channel.send({
+            content: chunks[i],
+            allowedMentions: { parse: [] },
+        });
     }
 }
 
-// Process one AI request.
+// --------------------------------------------------
+// ERROR MESSAGES
+// --------------------------------------------------
+
+function getFriendlyError(error) {
+    if (error?.code === "MISSING_GROQ_API_KEY") {
+        return "AI configuration error. Please contact a server administrator.";
+    }
+
+    if (
+        error?.code === "GROQ_RATE_LIMIT" ||
+        Number(error?.status) === 429
+    ) {
+        return "AI is currently busy or its free-tier quota has been reached. Please try again later.";
+    }
+
+    if (
+        error?.code === "GROQ_AUTH_ERROR" ||
+        Number(error?.status) === 401 ||
+        Number(error?.status) === 403
+    ) {
+        return "AI authentication failed. Please contact a server administrator.";
+    }
+
+    if (
+        error?.code === "GROQ_SERVER_ERROR" ||
+        Number(error?.status) >= 500
+    ) {
+        return "AI service is temporarily unavailable. Please try again later.";
+    }
+
+    return "Something went wrong while generating the AI response. Please try again.";
+}
+
+// --------------------------------------------------
+// MAIN AI PROCESSOR
+// --------------------------------------------------
+
 async function processAIMessage({
     message,
     replyMessage,
@@ -89,193 +181,146 @@ async function processAIMessage({
     request,
     requestKey,
 }) {
-    const signal = request.controller.signal;
+    let typingInterval = null;
 
     try {
         if (!isCurrentRequest(requestKey, request)) return;
 
-        // Fetch the latest server configuration.
+        // Fetch the latest server AI configuration.
         const config = await getAIConfig(message.guild.id);
-
-        if (!config.enabled) {
-            await safeEdit(
-                replyMessage,
-                "⚠️ AI is currently disabled on this server."
-            );
-            return;
-        }
-
-        if (!config.channels?.includes(message.channel.id)) {
-            await safeEdit(
-                replyMessage,
-                "⚠️ This channel is not configured for AI."
-            );
-            return;
-        }
 
         if (!isCurrentRequest(requestKey, request)) return;
 
-        // Get the user's conversation history.
+        if (!config.enabled) {
+            await safeEdit(replyMessage, "AI is currently disabled on this server.");
+            return;
+        }
+
+        // Get the user's temporary conversation history.
         const history = getConversation(
             message.guild.id,
             message.author.id
         );
 
-        // Build the current server mood and language instructions.
+        // Get current server mood and multilingual instructions.
         const systemPrompt = buildSystemPrompt(config.mood);
 
+        // Start Discord typing indicator.
+        await message.channel.sendTyping();
+
+        // Refresh typing while generation is in progress.
+        typingInterval = setInterval(() => {
+            if (
+                isCurrentRequest(requestKey, request) &&
+                !request.controller.signal.aborted
+            ) {
+                message.channel.sendTyping().catch(() => {});
+            }
+        }, 8000);
+
         console.log(
-            `🧠 AI Processing | Server: ${message.guild.name} | User: ${message.author.tag} | Mood: ${config.mood}`
+            `AI Processing | Server: ${message.guild.name} | User: ${message.author.username} | Mood: ${config.mood || "default"}`
         );
 
-        // Display typing indicator.
-        await message.channel.sendTyping().catch(() => {});
-
-        // Generate the complete answer.
-        // No partial response is displayed in Discord.
-        const aiResponse = await generateAIResponseStream({
+        // Generate AI response through Groq.
+        const response = await generateAIResponseStream({
             history,
             message: userMessage,
             systemPrompt,
-            signal,
+            signal: request.controller.signal,
         });
 
-        // Ignore cancelled or outdated responses.
         if (!isCurrentRequest(requestKey, request)) return;
 
-        if (!aiResponse || !aiResponse.trim()) {
-            throw new Error("Gemini returned an empty response.");
-        }
+        if (request.controller.signal.aborted) return;
 
-        // Save only successfully generated conversations.
+        // Save conversation only after successful generation.
         saveConversation(
             message.guild.id,
             message.author.id,
             userMessage,
-            aiResponse
+            response
         );
 
-        const chunks = splitMessage(aiResponse);
-
-        if (!isCurrentRequest(requestKey, request)) return;
-
-        // Send the complete final response in the original reply.
-        const editSuccess = await safeEdit(
+        // Send final response in Discord.
+        await sendAIResponse(
             replyMessage,
-            chunks[0] || "No response generated."
-        );
-
-        if (!editSuccess) return;
-
-        // Send additional parts if required.
-        for (let i = 1; i < chunks.length; i++) {
-            if (!isCurrentRequest(requestKey, request)) return;
-
-            await message.channel.send({
-                content: chunks[i],
-                allowedMentions: {
-                    parse: [],
-                },
-            });
-        }
-
-        console.log(
-            `✅ AI Final Reply Sent | User: ${message.author.tag} | Parts: ${chunks.length}`
+            message.channel,
+            response,
+            requestKey,
+            request
         );
 
     } catch (error) {
-        // Cancellation is expected when a newer message arrives.
         if (
-            signal.aborted ||
-            error?.name === "AbortError"
+            request.controller.signal.aborted ||
+            error?.name === "AbortError" ||
+            error?.code === "REQUEST_CANCELLED"
         ) {
             console.log(
-                `⏭️ AI Request Cancelled | User: ${message.author.tag}`
+                `AI Request Cancelled | User: ${message.author.username}`
             );
+
+            await safeDelete(replyMessage);
             return;
         }
+
+        safeErrorLog(error);
 
         if (!isCurrentRequest(requestKey, request)) return;
 
-        console.error("❌ AI Message Handler Error:", {
-            name: error?.name,
-            message: error?.message,
-            status: error?.status || error?.code || "Unknown",
-        });
-
-        // Handle exhausted Gemini daily quota.
-        if (error?.code === "DAILY_QUOTA_EXHAUSTED") {
-            await safeEdit(
-                replyMessage,
-                "⚠️ Gemini AI ka daily free quota complete ho gaya hai. Quota reset hone ka wait karo ya API billing upgrade karo."
-            );
-
-            return;
-        }
-
-        // Handle temporary rate limits separately.
-        if (Number(error?.status || error?.code) === 429) {
-            await safeEdit(
-                replyMessage,
-                "⚠️ Gemini API rate limit reached. Please thodi der baad try karo."
-            );
-
-            return;
-        }
-
-        // Generic error.
         await safeEdit(
             replyMessage,
-            "⚠️ AI response generate nahi ho paya. Please try again."
+            getFriendlyError(error)
         );
 
     } finally {
-        // Delete only the current request.
-        if (activeRequests.get(requestKey) === request) {
+        if (typingInterval) {
+            clearInterval(typingInterval);
+        }
+
+        // Only remove this request if it is still the current one.
+        if (isCurrentRequest(requestKey, request)) {
             activeRequests.delete(requestKey);
         }
     }
 }
+
+// --------------------------------------------------
+// DISCORD MESSAGE CREATE EVENT
+// --------------------------------------------------
 
 module.exports = {
     name: "messageCreate",
 
     async execute(message) {
         try {
-            // Ignore DMs, bots and webhook messages.
-            if (
-                !message.guild ||
-                message.author.bot ||
-                message.webhookId
-            ) {
-                return;
-            }
+            // Ignore DMs, bots, webhooks and invalid messages.
+            if (!message.guild) return;
+            if (!message.author || message.author.bot) return;
+            if (message.webhookId) return;
+            if (!message.content || !message.content.trim()) return;
 
-            const userMessage = message.content?.trim();
+            const userMessage = message.content.trim();
 
-            if (!userMessage) return;
-
-            // Validate message length.
-            if (userMessage.length > MAX_INPUT_LENGTH) {
-                await message.reply({
-                    content:
-                        "⚠️ Your message is too long. Please shorten it.",
-                    allowedMentions: {
-                        repliedUser: false,
-                        parse: [],
-                    },
+            // Prevent excessively long input.
+            if (userMessage.length > MAX_MESSAGE_LENGTH) {
+                return message.reply({
+                    content: `Your message is too long. Maximum allowed length is ${MAX_MESSAGE_LENGTH} characters.`,
+                    allowedMentions: { parse: [] },
                 });
-
-                return;
             }
 
-            // Get server configuration.
+            // Get server AI configuration.
             const config = await getAIConfig(message.guild.id);
 
-            if (!config.enabled) return;
+            if (!config || !config.enabled) return;
 
-            // Respond only in configured AI channels.
-            if (!config.channels?.includes(message.channel.id)) {
+            // Respond only inside configured AI channels.
+            if (
+                !Array.isArray(config.channels) ||
+                !config.channels.includes(message.channel.id)
+            ) {
                 return;
             }
 
@@ -284,50 +329,27 @@ module.exports = {
                 message.author.id
             );
 
-            // Cancel the previous request from this user.
+            // Cancel previous request from this same user.
             const previousRequest = activeRequests.get(requestKey);
 
             if (previousRequest) {
                 previousRequest.controller.abort();
-
-                if (previousRequest.replyMessage) {
-                    await safeEdit(
-                        previousRequest.replyMessage,
-                        "⏭️ Previous response cancelled. Processing your latest message..."
-                    );
-                }
             }
 
             // Create a new request.
             const request = {
                 controller: new AbortController(),
-                replyMessage: null,
             };
 
             activeRequests.set(requestKey, request);
 
-            // Immediately create a separate reply.
+            // Show Thinking message.
             const replyMessage = await message.reply({
                 content: "💭 Thinking...",
-                allowedMentions: {
-                    repliedUser: false,
-                    parse: [],
-                },
+                allowedMentions: { parse: [] },
             });
 
-            request.replyMessage = replyMessage;
-
-            // A newer request may have arrived during reply creation.
-            if (!isCurrentRequest(requestKey, request)) {
-                await safeEdit(
-                    replyMessage,
-                    "⏭️ Cancelled. A newer message is being processed."
-                );
-
-                return;
-            }
-
-            // Start processing without blocking other users.
+            // Process AI request without blocking other users.
             void processAIMessage({
                 message,
                 replyMessage,
@@ -337,10 +359,14 @@ module.exports = {
             });
 
         } catch (error) {
-            console.error("❌ Message Create Error:", {
-                name: error?.name,
-                message: error?.message,
-            });
+            safeErrorLog(error);
+
+            if (message.channel) {
+                await message.channel.send({
+                    content: "Something went wrong while processing your message.",
+                    allowedMentions: { parse: [] },
+                }).catch(() => {});
+            }
         }
     },
 };

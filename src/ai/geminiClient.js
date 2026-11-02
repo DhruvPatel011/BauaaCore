@@ -7,7 +7,7 @@ function getGroqClient() {
     const apiKey = process.env.GROQ_API_KEY;
 
     if (!apiKey || !apiKey.trim()) {
-        const error = new Error("GROQ_API_KEY is missing. Add it to Render Environment Variables.");
+        const error = new Error("GROQ_API_KEY is missing.");
         error.code = "MISSING_GROQ_API_KEY";
         throw error;
     }
@@ -25,34 +25,21 @@ function getGroqClient() {
     return groqClient;
 }
 
-function getErrorStatus(error) {
-    return Number(error?.status || error?.response?.status || 0);
-}
+function normalizeHistory(history = []) {
+    if (!Array.isArray(history)) return [];
 
-function createProviderError(error) {
-    const status = getErrorStatus(error);
-    const message = String(error?.message || "Unknown Groq API error");
-
-    const wrapped = new Error(message);
-    wrapped.name = error?.name || "GroqAPIError";
-    wrapped.status = status;
-    wrapped.originalError = error;
-
-    if (status === 401 || status === 403) {
-        wrapped.code = "GROQ_AUTH_ERROR";
-        wrapped.message = "Groq API key invalid or access denied. Check GROQ_API_KEY.";
-    } else if (status === 429) {
-        wrapped.code = "GROQ_RATE_LIMIT";
-        wrapped.message = "Groq rate limit or free-tier quota reached. Please try again later.";
-    } else if (status === 400) {
-        wrapped.code = "GROQ_BAD_REQUEST";
-        wrapped.message = "Groq rejected the request. Check the model and message format.";
-    } else if (status >= 500) {
-        wrapped.code = "GROQ_SERVER_ERROR";
-        wrapped.message = "Groq service is temporarily unavailable. Please try again.";
-    }
-
-    return wrapped;
+    return history
+        .filter(item => item && Array.isArray(item.parts))
+        .map(item => ({
+            role: item.role === "model" || item.role === "assistant"
+                ? "assistant"
+                : "user",
+            content: item.parts
+                .map(part => typeof part?.text === "string" ? part.text : "")
+                .join("")
+                .trim(),
+        }))
+        .filter(item => item.content.length > 0);
 }
 
 function makeAbortError() {
@@ -60,31 +47,6 @@ function makeAbortError() {
     error.name = "AbortError";
     error.code = "REQUEST_CANCELLED";
     return error;
-}
-
-function isAbortError(error, signal) {
-    return Boolean(
-        signal?.aborted ||
-        error?.name === "AbortError" ||
-        error?.code === "ABORT_ERR"
-    );
-}
-
-function normalizeHistory(history) {
-    if (!Array.isArray(history)) return [];
-
-    return history
-        .filter((item) => item && Array.isArray(item.parts))
-        .map((item) => ({
-            role: item.role === "model" || item.role === "assistant"
-                ? "assistant"
-                : "user",
-            content: item.parts
-                .map((part) => typeof part?.text === "string" ? part.text : "")
-                .join("")
-                .trim(),
-        }))
-        .filter((item) => item.content.length > 0);
 }
 
 async function generateAIResponseStream({
@@ -106,7 +68,8 @@ async function generateAIResponseStream({
     const messages = [
         {
             role: "system",
-            content: systemPrompt || "You are a helpful, multilingual Discord AI assistant.",
+            content: systemPrompt ||
+                "You are BauaaCore. Match the latest user's language and writing style. Answer only what is asked, concisely.",
         },
         ...normalizeHistory(history),
         {
@@ -116,19 +79,17 @@ async function generateAIResponseStream({
     ];
 
     try {
-        console.log(`Groq AI Request | Model: ${model}`);
+        console.log(`Groq Request | Model: ${model}`);
 
         const stream = await client.chat.completions.create(
             {
                 model,
                 messages,
-                temperature: 0.7,
-                max_completion_tokens: 2048,
+                temperature: 0.3,
+                max_completion_tokens: 1024,
                 stream: true,
             },
-            {
-                signal,
-            }
+            { signal }
         );
 
         let fullResponse = "";
@@ -136,11 +97,11 @@ async function generateAIResponseStream({
         for await (const chunk of stream) {
             if (signal?.aborted) throw makeAbortError();
 
-            const text = chunk.choices?.[0]?.delta?.content;
+            const content = chunk.choices?.[0]?.delta?.content;
 
-            if (typeof text !== "string" || !text) continue;
+            if (typeof content !== "string" || !content) continue;
 
-            fullResponse += text;
+            fullResponse += content;
 
             if (typeof onText === "function") {
                 await onText(fullResponse);
@@ -151,30 +112,60 @@ async function generateAIResponseStream({
             throw new Error("Groq returned an empty response.");
         }
 
-        console.log("Groq AI Response Generated Successfully!");
+        console.log("Groq Response Generated Successfully!");
 
         return fullResponse.trim();
 
     } catch (error) {
-        if (isAbortError(error, signal)) {
+        if (
+            signal?.aborted ||
+            error?.name === "AbortError" ||
+            error?.code === "ABORT_ERR"
+        ) {
             throw makeAbortError();
         }
 
-        const wrappedError = createProviderError(error);
+        const status = Number(error?.status || 0);
 
         console.error("Groq API Error:", {
-            status: wrappedError.status || "Unknown",
-            code: wrappedError.code || "UNKNOWN",
-            message: wrappedError.message,
+            status: status || "Unknown",
+            code: error?.code || "UNKNOWN",
+            message: String(error?.message || "Unknown error").slice(0, 1000),
         });
 
-        throw wrappedError;
+        if (status === 429) {
+            const quotaError = new Error(
+                "AI is currently busy or its free-tier quota has been reached. Please try again later."
+            );
+            quotaError.code = "GROQ_RATE_LIMIT";
+            quotaError.status = 429;
+            throw quotaError;
+        }
+
+        if (status === 401 || status === 403) {
+            const authError = new Error(
+                "Groq API authentication failed. Check the API key."
+            );
+            authError.code = "GROQ_AUTH_ERROR";
+            authError.status = status;
+            throw authError;
+        }
+
+        if (status >= 500) {
+            const serverError = new Error(
+                "Groq service is temporarily unavailable."
+            );
+            serverError.code = "GROQ_SERVER_ERROR";
+            serverError.status = status;
+            throw serverError;
+        }
+
+        throw error;
     }
 }
 
 module.exports = {
     getGroqClient,
-    // Backward-compatible alias if any old file still imports this name.
     getGeminiClient: getGroqClient,
     generateAIResponseStream,
 };
