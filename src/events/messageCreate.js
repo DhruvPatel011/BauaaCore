@@ -1,110 +1,78 @@
 
 const { getAIConfig } = require("../ai/aiConfigManager");
-
 const {
     getConversation,
     saveConversation,
 } = require("../ai/conversationManager");
 
-const { generateAIResponse } = require("../ai/geminiClient");
+const {
+    generateAIResponseStream,
+} = require("../ai/geminiClient");
+
 const { buildSystemPrompt } = require("../ai/prompt");
 
-const cooldowns = new Map();
+const MAX_LENGTH = 1900;
+const EDIT_INTERVAL = 700;
 
-const COOLDOWN_TIME = 5000;
-const MAX_MESSAGE_LENGTH = 1900;
-
-function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
+function splitMessage(text) {
     const chunks = [];
     let remaining = text.trim();
 
-    while (remaining.length > maxLength) {
-        let splitAt = remaining.lastIndexOf("\n", maxLength);
+    while (remaining.length > MAX_LENGTH) {
+        let splitAt = remaining.lastIndexOf("\n", MAX_LENGTH);
 
-        if (splitAt < maxLength * 0.5) {
-            splitAt = remaining.lastIndexOf(" ", maxLength);
+        if (splitAt < MAX_LENGTH * 0.5) {
+            splitAt = remaining.lastIndexOf(" ", MAX_LENGTH);
         }
 
-        if (splitAt < maxLength * 0.5) {
-            splitAt = maxLength;
+        if (splitAt < MAX_LENGTH * 0.5) {
+            splitAt = MAX_LENGTH;
         }
 
         chunks.push(remaining.slice(0, splitAt).trim());
         remaining = remaining.slice(splitAt).trim();
     }
 
-    if (remaining.length > 0) {
-        chunks.push(remaining);
-    }
+    if (remaining) chunks.push(remaining);
 
     return chunks;
-}
-
-function getCooldownKey(guildId, userId) {
-    return `${guildId}:${userId}`;
-}
-
-function isOnCooldown(guildId, userId) {
-    const key = getCooldownKey(guildId, userId);
-    const lastMessage = cooldowns.get(key);
-
-    if (!lastMessage) {
-        return false;
-    }
-
-    const elapsed = Date.now() - lastMessage;
-
-    if (elapsed >= COOLDOWN_TIME) {
-        cooldowns.delete(key);
-        return false;
-    }
-
-    return true;
-}
-
-function setCooldown(guildId, userId) {
-    cooldowns.set(
-        getCooldownKey(guildId, userId),
-        Date.now()
-    );
 }
 
 module.exports = {
     name: "messageCreate",
 
     async execute(message) {
-        if (!message.guild || message.author.bot || message.webhookId) {
-            return;
-        }
+        if (
+            !message.guild ||
+            message.author.bot ||
+            message.webhookId
+        ) return;
 
         const userMessage = message.content.trim();
 
-        if (!userMessage) {
-            return;
-        }
+        if (!userMessage) return;
 
         try {
             const config = await getAIConfig(message.guild.id);
 
-            if (!config.enabled) {
-                return;
-            }
+            if (!config.enabled) return;
 
-            if (!config.channels.includes(message.channel.id)) {
-                return;
-            }
-
-            if (isOnCooldown(message.guild.id, message.author.id)) {
-                return;
-            }
-
-            setCooldown(message.guild.id, message.author.id);
+            if (!config.channels.includes(message.channel.id)) return;
 
             console.log(
-                `💬 AI Message | Server: ${message.guild.name} | User: ${message.author.tag}`
+                `💬 AI Message | ${message.guild.name} | ${message.author.tag}`
             );
 
-            await message.channel.sendTyping();
+            // Show the reply immediately under the user's message.
+            const replyMessage = await message.reply({
+                content: "✍️",
+                allowedMentions: {
+                    repliedUser: false,
+                    parse: [],
+                },
+            });
+
+            await message.channel.sendTyping().catch(() => {});
 
             const history = getConversation(
                 message.guild.id,
@@ -113,15 +81,33 @@ module.exports = {
 
             const systemPrompt = buildSystemPrompt(config.mood);
 
-            const aiResponse = await generateAIResponse({
+            let lastEdit = 0;
+            let latestText = "";
+
+            const aiResponse = await generateAIResponseStream({
                 history,
                 message: userMessage,
                 systemPrompt,
-            });
 
-            if (!aiResponse || !aiResponse.trim()) {
-                throw new Error("AI returned an empty response.");
-            }
+                onText: async (currentText) => {
+                    latestText = currentText;
+
+                    const now = Date.now();
+
+                    // Avoid Discord edit rate limits.
+                    if (now - lastEdit < EDIT_INTERVAL) return;
+
+                    // Keep streaming preview within Discord's limit.
+                    if (latestText.length > MAX_LENGTH) return;
+
+                    lastEdit = now;
+
+                    await replyMessage.edit({
+                        content: latestText + " ▌",
+                        allowedMentions: { parse: [] },
+                    }).catch(() => {});
+                },
+            });
 
             saveConversation(
                 message.guild.id,
@@ -132,50 +118,40 @@ module.exports = {
 
             const chunks = splitMessage(aiResponse);
 
-            if (chunks.length > 0) {
-                await message.reply({
-                    content: chunks[0],
-                    allowedMentions: {
-                        repliedUser: false,
-                        parse: [],
-                    },
-                });
-            }
+            // Final complete answer.
+            await replyMessage.edit({
+                content: chunks[0] || "I couldn't generate a response.",
+                allowedMentions: { parse: [] },
+            });
 
+            // Send additional chunks if required.
             for (let i = 1; i < chunks.length; i++) {
                 await message.channel.send({
                     content: chunks[i],
-                    allowedMentions: {
-                        parse: [],
-                    },
+                    allowedMentions: { parse: [] },
                 });
             }
 
             console.log(
-                `✅ AI Reply Sent | User: ${message.author.tag} | Chunks: ${chunks.length}`
+                `✅ AI Reply Completed | ${message.author.tag}`
             );
 
         } catch (error) {
-            console.error("❌ AI Message Handler Error:", {
+            console.error("❌ AI Message Error:", {
                 name: error.name,
                 message: error.message,
                 status: error.status || error.code || "Unknown",
             });
 
-            try {
-                await message.reply({
-                    content: "⚠️ AI response generate nahi ho paya. Please thodi der baad try karo.",
-                    allowedMentions: {
-                        repliedUser: false,
-                        parse: [],
-                    },
-                });
-            } catch (replyError) {
-                console.error(
-                    "❌ AI Error Reply Failed:",
-                    replyError.message
-                );
-            }
+            // If a placeholder exists, the catch block can be
+            // extended to edit it. Otherwise send a normal error reply.
+            await message.reply({
+                content: "⚠️ AI abhi respond nahi kar pa raha. Please try again.",
+                allowedMentions: {
+                    repliedUser: false,
+                    parse: [],
+                },
+            }).catch(() => {});
         }
     },
 };

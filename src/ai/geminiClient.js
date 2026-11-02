@@ -4,8 +4,8 @@ let aiClient = null;
 async function getGeminiClient() {
     const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!apiKey || !apiKey.trim()) {
-        throw new Error("GEMINI_API_KEY is missing from environment variables.");
+    if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is missing.");
     }
 
     if (!aiClient) {
@@ -14,84 +14,62 @@ async function getGeminiClient() {
         aiClient = new GoogleGenAI({
             apiKey: apiKey.trim(),
             httpOptions: {
-                timeout: 30000,
+                timeout: 60000,
             },
         });
 
-        console.log("✨ Gemini AI Client Initialized Successfully!");
+        console.log("✨ Gemini Client Initialized!");
     }
 
     return aiClient;
 }
 
-
-async function generateAIResponse({
+async function generateAIResponseStream({
     history = [],
     message,
     systemPrompt,
+    onText,
 }) {
-    if (!message || typeof message !== "string") {
-        throw new Error("A valid user message is required.");
-    }
-
     const ai = await getGeminiClient();
+
     const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
-    const maxAttempts = 3;
+    const chat = ai.chats.create({
+        model,
+        history,
+        config: {
+            systemInstruction: systemPrompt,
+            maxOutputTokens: 1024,
+        },
+    });
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            console.log(
-                `🚀 Gemini Request | Model: ${model} | Attempt: ${attempt}/${maxAttempts}`
-            );
+    console.log(`🚀 Streaming Gemini Request | ${model}`);
 
-            const chat = ai.chats.create({
-                model,
-                history,
-                config: {
-                    systemInstruction: systemPrompt,
-                    maxOutputTokens: 2048,
-                },
-            });
+    const stream = await chat.sendMessageStream({ message });
 
-            const response = await chat.sendMessage({ message });
-            const aiText = response.text?.trim();
+    let fullResponse = "";
 
-            if (!aiText) {
-                throw new Error("Gemini returned an empty response.");
-            }
+    for await (const chunk of stream) {
+        const text = chunk.text || "";
 
-            console.log("✅ Gemini Response Generated Successfully!");
-            return aiText;
+        if (!text) continue;
 
-        } catch (error) {
-            const status = error?.status || error?.code;
+        fullResponse += text;
 
-            console.error("❌ Gemini API Error:", {
-                attempt,
-                status,
-                message: error?.message,
-            });
-
-            const retryable = [408, 429, 500, 502, 503, 504].includes(
-                Number(status)
-            );
-
-            if (!retryable || attempt === maxAttempts) {
-                throw error;
-            }
-
-            const delay = 1000 * Math.pow(2, attempt - 1);
-            console.log(`⏳ Retrying Gemini in ${delay}ms...`);
-
-            await new Promise(resolve => setTimeout(resolve, delay));
+        if (typeof onText === "function") {
+            await onText(fullResponse);
         }
     }
 
-    throw new Error("Gemini failed after all retry attempts.");
+    if (!fullResponse.trim()) {
+        throw new Error("Gemini returned an empty response.");
+    }
+
+    console.log("✅ Gemini Streaming Completed!");
+
+    return fullResponse.trim();
 }
 
-
 module.exports = {
-    generateAIResponse,
+    generateAIResponseStream,
 };
