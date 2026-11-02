@@ -1,3 +1,4 @@
+
 const {
     SlashCommandBuilder,
     PermissionFlagsBits,
@@ -9,17 +10,18 @@ const {
     listIgnored,
 } = require("../utils/ignoreManager");
 
-const ID_PATTERN = /^\\d{17,20}$/;
+const ID_PATTERN = /^\d{17,20}$/;
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("ignore")
         .setDescription("Manage IDs excluded from BauaaCore logging.")
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+
         .addSubcommand(subcommand =>
             subcommand
                 .setName("add")
-                .setDescription("Add a user, bot or webhook ID to the ignore list.")
+                .setDescription("Add a user, bot or webhook ID.")
                 .addStringOption(option =>
                     option
                         .setName("type")
@@ -38,10 +40,11 @@ module.exports = {
                         .setRequired(true)
                 )
         )
+
         .addSubcommand(subcommand =>
             subcommand
                 .setName("remove")
-                .setDescription("Remove an ID from the ignore list.")
+                .setDescription("Remove an ID from ignore list.")
                 .addStringOption(option =>
                     option
                         .setName("id")
@@ -49,23 +52,26 @@ module.exports = {
                         .setRequired(true)
                 )
         )
+
         .addSubcommand(subcommand =>
             subcommand
                 .setName("list")
-                .setDescription("Show all ignored IDs in this server.")
+                .setDescription("Show ignored IDs in this server.")
         ),
 
     async execute(interaction) {
         if (!interaction.inGuild()) {
             return interaction.reply({
-                content: "❌ This command can only be used inside a server.",
+                content: "❌ Use this command inside a server.",
                 ephemeral: true,
             });
         }
 
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        if (!interaction.memberPermissions?.has(
+            PermissionFlagsBits.Administrator
+        )) {
             return interaction.reply({
-                content: "❌ Only server administrators can use this command.",
+                content: "❌ Only administrators can use this command.",
                 ephemeral: true,
             });
         }
@@ -82,7 +88,7 @@ module.exports = {
 
                 if (!ID_PATTERN.test(id)) {
                     return interaction.editReply(
-                        "❌ Invalid Discord ID. Please provide a valid 17–20 digit ID."
+                        "❌ Invalid Discord ID. Provide a valid 17–20 digit ID."
                     );
                 }
 
@@ -93,14 +99,10 @@ module.exports = {
                     interaction.user.id
                 );
 
-                if (result.exists) {
-                    return interaction.editReply(
-                        `ℹ️ ID \`${id}\` is already in this server's ignore list.`
-                    );
-                }
-
                 return interaction.editReply(
-                    `✅ Added **${type}** ID \`${id}\` to the ignore list. Related supported logs will be skipped.`
+                    result.exists
+                        ? `ℹ️ ID \`${id}\` is already ignored.`
+                        : `✅ Added **${type}** ID \`${id}\` to the ignore list.`
                 );
             }
 
@@ -108,7 +110,9 @@ module.exports = {
                 const id = interaction.options.getString("id", true).trim();
 
                 if (!ID_PATTERN.test(id)) {
-                    return interaction.editReply("❌ Please provide a valid 17–20 digit Discord ID.");
+                    return interaction.editReply(
+                        "❌ Invalid Discord ID."
+                    );
                 }
 
                 const removed = await removeIgnored(guildId, id);
@@ -116,7 +120,7 @@ module.exports = {
                 return interaction.editReply(
                     removed
                         ? `✅ Removed ID \`${id}\` from the ignore list.`
-                        : `ℹ️ ID \`${id}\` was not found in the ignore list.`
+                        : `ℹ️ ID \`${id}\` was not found.`
                 );
             }
 
@@ -124,24 +128,29 @@ module.exports = {
                 const records = await listIgnored(guildId);
 
                 if (!records.length) {
-                    return interaction.editReply("📭 No IDs are currently ignored in this server.");
+                    return interaction.editReply(
+                        "📭 No IDs are currently ignored."
+                    );
                 }
 
-                const lines = records.slice(0, 40).map((record, index) =>
-                    `**${index + 1}. ${record.type.toUpperCase()}** — \`${record.id}\``
+                const lines = records.slice(0, 40).map(
+                    (record, index) =>
+                        `**${index + 1}. ${record.type.toUpperCase()}** — \`${record.id}\``
                 );
 
-                const remaining = records.length - lines.length;
-                if (remaining > 0) lines.push(`…and ${remaining} more.`);
+                if (records.length > 40) {
+                    lines.push(`…and ${records.length - 40} more.`);
+                }
 
                 return interaction.editReply(
-                    `**🚫 BauaaCore Ignore List (${records.length})**\\n\\n${lines.join("\\n")}`
+                    `**🚫 BauaaCore Ignore List (${records.length})**\n\n${lines.join("\n")}`
                 );
             }
         } catch (error) {
             console.error("❌ Ignore command error:", error);
+
             return interaction.editReply(
-                "❌ Could not update the ignore list. Check MongoDB connection and try again."
+                "❌ Could not update ignore list. Check MongoDB connection."
             );
         }
     },
