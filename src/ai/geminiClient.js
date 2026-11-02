@@ -24,6 +24,7 @@ async function getGeminiClient() {
     return aiClient;
 }
 
+
 async function generateAIResponse({
     history = [],
     message,
@@ -33,50 +34,63 @@ async function generateAIResponse({
         throw new Error("A valid user message is required.");
     }
 
-    try {
-        const ai = await getGeminiClient();
-        const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+    const ai = await getGeminiClient();
+    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
-        console.log(`🚀 Gemini Request Started | Model: ${model}`);
+    const maxAttempts = 3;
 
-        const chat = ai.chats.create({
-            model,
-            history,
-            config: {
-                systemInstruction: systemPrompt,
-                temperature: 0.8,
-                maxOutputTokens: 2048,
-            },
-        });
-
-        const response = await chat.sendMessage({
-            message,
-        });
-
-        const aiText = response.text?.trim();
-
-        if (!aiText) {
-            throw new Error(
-                `Empty Gemini response. Finish reason: ${
-                    response.candidates?.[0]?.finishReason || "Unknown"
-                }`
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            console.log(
+                `🚀 Gemini Request | Model: ${model} | Attempt: ${attempt}/${maxAttempts}`
             );
+
+            const chat = ai.chats.create({
+                model,
+                history,
+                config: {
+                    systemInstruction: systemPrompt,
+                    maxOutputTokens: 2048,
+                },
+            });
+
+            const response = await chat.sendMessage({ message });
+            const aiText = response.text?.trim();
+
+            if (!aiText) {
+                throw new Error("Gemini returned an empty response.");
+            }
+
+            console.log("✅ Gemini Response Generated Successfully!");
+            return aiText;
+
+        } catch (error) {
+            const status = error?.status || error?.code;
+
+            console.error("❌ Gemini API Error:", {
+                attempt,
+                status,
+                message: error?.message,
+            });
+
+            const retryable = [408, 429, 500, 502, 503, 504].includes(
+                Number(status)
+            );
+
+            if (!retryable || attempt === maxAttempts) {
+                throw error;
+            }
+
+            const delay = 1000 * Math.pow(2, attempt - 1);
+            console.log(`⏳ Retrying Gemini in ${delay}ms...`);
+
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
-
-        console.log("✅ Gemini Response Generated Successfully!");
-
-        return aiText;
-
-    } catch (error) {
-        console.error("❌ Gemini API Error:", {
-            name: error?.name,
-            message: error?.message,
-            status: error?.status || error?.code || "Unknown",
-        });
-
-        throw error;
     }
+
+    throw new Error("Gemini failed after all retry attempts.");
 }
+
 
 module.exports = {
     generateAIResponse,
