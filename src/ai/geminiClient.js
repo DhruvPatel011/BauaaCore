@@ -1,7 +1,7 @@
 
 let aiClient = null;
 
-// Initialize Gemini SDK
+// Initialize Gemini SDK once.
 async function getGeminiClient() {
     const apiKey = process.env.GEMINI_API_KEY;
 
@@ -38,35 +38,79 @@ async function getGeminiClient() {
     return aiClient;
 }
 
-// Retry helper
-function wait(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+// Abort-aware delay for retry attempts.
+function wait(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            const error = new Error("Request cancelled.");
+            error.name = "AbortError";
+            reject(error);
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, ms);
+
+        function onAbort() {
+            clearTimeout(timer);
+            cleanup();
+
+            const error = new Error("Request cancelled.");
+            error.name = "AbortError";
+            reject(error);
+        }
+
+        function cleanup() {
+            signal?.removeEventListener("abort", onAbort);
+        }
+
+        signal?.addEventListener("abort", onAbort, {
+            once: true,
+        });
+    });
 }
 
-// Generate AI response with streaming
+// Generate Gemini response using streaming.
 async function generateAIResponseStream({
     history = [],
     message,
     systemPrompt,
     onText,
+    signal,
 }) {
     if (!message || typeof message !== "string") {
         throw new Error("A valid user message is required.");
     }
 
+    if (signal?.aborted) {
+        const error = new Error("Request cancelled.");
+        error.name = "AbortError";
+        throw error;
+    }
+
     const ai = await getGeminiClient();
 
+    // Keep the model configurable through Render environment variables.
     const model =
-        process.env.GEMINI_MODEL || "gemini-3.8-flash";
+        process.env.GEMINI_MODEL || "gemini-flash-latest";
 
     const maxAttempts = 3;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
+            if (signal?.aborted) {
+                const error = new Error("Request cancelled.");
+                error.name = "AbortError";
+                throw error;
+            }
+
             console.log(
                 `🚀 Gemini Request | Model: ${model} | Attempt: ${attempt}/${maxAttempts}`
             );
 
+            // Create a fresh chat for each attempt.
             const chat = ai.chats.create({
                 model,
 
@@ -75,13 +119,13 @@ async function generateAIResponseStream({
                 config: {
                     systemInstruction: systemPrompt,
 
-                    thinkingConfig: {
-                        thinkingLevel: "medium",
-                    },
-
                     temperature: 0.8,
 
-                    maxOutputTokens: 4096,
+                    maxOutputTokens: 2048,
+
+                    // Cancels the active API operation when a newer
+                    // message replaces the current request.
+                    abortSignal: signal,
                 },
             });
 
@@ -92,12 +136,20 @@ async function generateAIResponseStream({
             let fullResponse = "";
 
             for await (const chunk of stream) {
+                // Stop processing immediately if this request is outdated.
+                if (signal?.aborted) {
+                    const error = new Error("Request cancelled.");
+                    error.name = "AbortError";
+                    throw error;
+                }
+
                 const chunkText = chunk.text || "";
 
                 if (!chunkText) continue;
 
                 fullResponse += chunkText;
 
+                // Send accumulated text to Discord message editor.
                 if (typeof onText === "function") {
                     await onText(fullResponse);
                 }
@@ -110,20 +162,32 @@ async function generateAIResponseStream({
             }
 
             console.log(
-                "✅ Gemini Response Generated Successfully!"
+                `✅ Gemini Response Generated Successfully | Model: ${model}`
             );
 
             return fullResponse.trim();
 
         } catch (error) {
+            // Never retry a cancelled/outdated request.
+            if (
+                signal?.aborted ||
+                error?.name === "AbortError"
+            ) {
+                console.log("⏭️ Gemini Request Cancelled.");
+                throw error;
+            }
+
             const status = Number(
-                error?.status || error?.code || 0
+                error?.status ||
+                error?.code ||
+                error?.error?.code ||
+                0
             );
 
             console.error("❌ Gemini API Error:", {
                 attempt,
-                status,
                 name: error?.name,
+                status,
                 message: error?.message,
             });
 
@@ -143,13 +207,14 @@ async function generateAIResponseStream({
                 throw error;
             }
 
+            // Exponential backoff: 1s, 2s.
             const delay = 1000 * Math.pow(2, attempt - 1);
 
             console.log(
                 `⏳ Retrying Gemini request in ${delay}ms...`
             );
 
-            await wait(delay);
+            await wait(delay, signal);
         }
     }
 

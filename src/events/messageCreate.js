@@ -16,21 +16,24 @@ const {
     buildSystemPrompt,
 } = require("../ai/prompt");
 
-// Discord message limit is 2000 characters.
-// Keep a safety margin.
 const MAX_MESSAGE_LENGTH = 1900;
-
-// Minimum time between Discord message edits.
+const MAX_INPUT_LENGTH = 12000;
 const EDIT_INTERVAL = 800;
 
-// Maximum user input length.
-const MAX_INPUT_LENGTH = 12000;
+// Only the latest request for each user remains active.
+const activeRequests = new Map();
 
-// Each user's requests are processed in order.
-// Different users can still use AI simultaneously.
-const userQueues = new Map();
+function getRequestKey(guildId, userId) {
+    return `${guildId}:${userId}`;
+}
 
-// Split long AI responses into Discord-safe messages.
+function isCurrentRequest(key, request) {
+    return (
+        activeRequests.get(key) === request &&
+        !request.controller.signal.aborted
+    );
+}
+
 function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
     const chunks = [];
     let remaining = text.trim();
@@ -47,46 +50,18 @@ function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
         }
 
         chunks.push(remaining.slice(0, splitAt).trim());
-
         remaining = remaining.slice(splitAt).trim();
     }
 
-    if (remaining.length > 0) {
-        chunks.push(remaining);
-    }
+    if (remaining) chunks.push(remaining);
 
     return chunks;
 }
 
-// Create a unique queue key for each user in each server.
-function getQueueKey(guildId, userId) {
-    return `${guildId}:${userId}`;
-}
-
-// Queue requests from the same user to preserve conversation order.
-function enqueueUserRequest(key, task) {
-    const previousTask = userQueues.get(key) || Promise.resolve();
-
-    const currentTask = previousTask
-        .catch(() => {})
-        .then(task);
-
-    userQueues.set(key, currentTask);
-
-    currentTask.finally(() => {
-        if (userQueues.get(key) === currentTask) {
-            userQueues.delete(key);
-        }
-    }).catch(() => {});
-
-    return currentTask;
-}
-
-// Safely update the Discord reply.
-async function safeEdit(message, content) {
+async function safeEdit(replyMessage, content) {
     try {
-        await message.edit({
-            content: content || "Thinking...",
+        await replyMessage.edit({
+            content,
             allowedMentions: {
                 parse: [],
             },
@@ -94,88 +69,73 @@ async function safeEdit(message, content) {
 
         return true;
     } catch (error) {
-        console.error("Discord message edit failed:", error.message);
+        console.error("Discord Edit Error:", error.message);
         return false;
     }
 }
 
-// Process one AI request.
-async function processAIMessage(message, replyMessage, userMessage) {
+async function processAIMessage({
+    message,
+    replyMessage,
+    userMessage,
+    config,
+    request,
+    requestKey,
+}) {
+    const signal = request.controller.signal;
+
     try {
-        // Fetch latest history when this request reaches the queue.
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        // Get conversation history when processing begins.
         const history = getConversation(
             message.guild.id,
             message.author.id
         );
 
-        const config = await getAIConfig(message.guild.id);
-
-        if (!config.enabled) {
-            await safeEdit(
-                replyMessage,
-                "⚠️ AI is currently disabled on this server."
-            );
-            return;
-        }
-
-        if (!config.channels?.includes(message.channel.id)) {
-            await safeEdit(
-                replyMessage,
-                "⚠️ This channel is not configured for AI."
-            );
-            return;
-        }
-
         const systemPrompt = buildSystemPrompt(config.mood);
 
         let lastEditTime = 0;
-        let latestText = "";
 
-        // Start Discord typing indicator.
         await message.channel.sendTyping().catch(() => {});
 
         console.log(
-            `🧠 AI Processing | Server: ${message.guild.name} | User: ${message.author.tag}`
+            `🧠 AI Processing | User: ${message.author.tag}`
         );
 
-        // Generate response using Gemini streaming.
         const aiResponse = await generateAIResponseStream({
             history,
             message: userMessage,
             systemPrompt,
+            signal,
 
             onText: async (currentText) => {
-                latestText = currentText;
+                if (!isCurrentRequest(requestKey, request)) return;
 
                 const now = Date.now();
 
-                // Avoid excessive Discord API edits.
-                if (now - lastEditTime < EDIT_INTERVAL) {
-                    return;
-                }
+                if (now - lastEditTime < EDIT_INTERVAL) return;
+
+                // Avoid Discord's 2000-character message limit.
+                if (currentText.length >= MAX_MESSAGE_LENGTH - 2) return;
 
                 lastEditTime = now;
 
-                // Show partial response while Gemini generates.
-                const preview = latestText.slice(
-                    0,
-                    MAX_MESSAGE_LENGTH - 2
+                await safeEdit(
+                    replyMessage,
+                    `${currentText} ▌`
                 );
-
-                if (preview.trim()) {
-                    await safeEdit(
-                        replyMessage,
-                        `${preview} ▌`
-                    );
-                }
             },
         });
 
+        // Do not send or save an outdated response.
+        if (!isCurrentRequest(requestKey, request)) return;
+
         if (!aiResponse || !aiResponse.trim()) {
-            throw new Error("AI returned an empty response.");
+            throw new Error("Gemini returned an empty response.");
         }
 
-        // Save conversation only after successful generation.
+        // Save only successfully completed responses.
         saveConversation(
             message.guild.id,
             message.author.id,
@@ -183,17 +143,20 @@ async function processAIMessage(message, replyMessage, userMessage) {
             aiResponse
         );
 
-        // Split the final response if necessary.
         const chunks = splitMessage(aiResponse);
 
-        // Replace streaming preview with final answer.
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        // Finalize the original reply.
         await safeEdit(
             replyMessage,
             chunks[0] || "I couldn't generate a response."
         );
 
-        // Send remaining parts as separate messages.
+        // Send remaining chunks only while this request is current.
         for (let i = 1; i < chunks.length; i++) {
+            if (!isCurrentRequest(requestKey, request)) return;
+
             await message.channel.send({
                 content: chunks[i],
                 allowedMentions: {
@@ -203,21 +166,36 @@ async function processAIMessage(message, replyMessage, userMessage) {
         }
 
         console.log(
-            `✅ AI Reply Completed | User: ${message.author.tag} | Parts: ${chunks.length}`
+            `✅ AI Reply Completed | User: ${message.author.tag}`
         );
 
     } catch (error) {
-        console.error("❌ AI Message Handler Error:", {
+        // Cancellation is expected when a newer message arrives.
+        if (signal.aborted) {
+            console.log(
+                `⏭️ Previous AI request cancelled | User: ${message.author.tag}`
+            );
+            return;
+        }
+
+        if (!isCurrentRequest(requestKey, request)) return;
+
+        console.error("❌ AI Message Error:", {
             name: error?.name,
             message: error?.message,
             status: error?.status || error?.code || "Unknown",
         });
 
-        // Update the existing reply instead of sending a duplicate.
         await safeEdit(
             replyMessage,
             "⚠️ AI response generate nahi ho paya. Please try again."
         );
+
+    } finally {
+        // Never delete a newer request's entry.
+        if (activeRequests.get(requestKey) === request) {
+            activeRequests.delete(requestKey);
+        }
     }
 }
 
@@ -226,7 +204,6 @@ module.exports = {
 
     async execute(message) {
         try {
-            // Ignore DMs, bots and webhook messages.
             if (
                 !message.guild ||
                 message.author.bot ||
@@ -239,10 +216,9 @@ module.exports = {
 
             if (!userMessage) return;
 
-            // Avoid excessively large prompts.
             if (userMessage.length > MAX_INPUT_LENGTH) {
                 await message.reply({
-                    content: "⚠️ Your message is too long. Please shorten it.",
+                    content: "⚠️ Message bahut lamba hai. Please shorten it.",
                     allowedMentions: {
                         repliedUser: false,
                         parse: [],
@@ -252,17 +228,42 @@ module.exports = {
                 return;
             }
 
-            // Load server AI configuration.
             const config = await getAIConfig(message.guild.id);
 
             if (!config.enabled) return;
 
-            // Only respond inside configured AI channels.
             if (!config.channels?.includes(message.channel.id)) {
                 return;
             }
 
-            // Create a separate reply immediately.
+            const requestKey = getRequestKey(
+                message.guild.id,
+                message.author.id
+            );
+
+            // Cancel the previous request from this user.
+            const previousRequest = activeRequests.get(requestKey);
+
+            if (previousRequest) {
+                previousRequest.controller.abort();
+
+                if (previousRequest.replyMessage) {
+                    await safeEdit(
+                        previousRequest.replyMessage,
+                        "⏭️ Previous response cancelled — processing your latest message."
+                    );
+                }
+            }
+
+            // Create a fresh request.
+            const request = {
+                controller: new AbortController(),
+                replyMessage: null,
+            };
+
+            activeRequests.set(requestKey, request);
+
+            // Immediately create a reply under the new user message.
             const replyMessage = await message.reply({
                 content: "💭 Thinking...",
                 allowedMentions: {
@@ -271,23 +272,26 @@ module.exports = {
                 },
             });
 
-            const queueKey = getQueueKey(
-                message.guild.id,
-                message.author.id
-            );
+            request.replyMessage = replyMessage;
 
-            // Process requests in the order they were received.
-            enqueueUserRequest(queueKey, () =>
-                processAIMessage(
-                    message,
+            // A newer message may have arrived while creating the reply.
+            if (!isCurrentRequest(requestKey, request)) {
+                await safeEdit(
                     replyMessage,
-                    userMessage
-                )
-            ).catch(error => {
-                console.error(
-                    "❌ AI Queue Error:",
-                    error.message
+                    "⏭️ Cancelled — a newer message is being processed."
                 );
+
+                return;
+            }
+
+            // Start generation without blocking other incoming messages.
+            void processAIMessage({
+                message,
+                replyMessage,
+                userMessage,
+                config,
+                request,
+                requestKey,
             });
 
         } catch (error) {
