@@ -2,6 +2,7 @@
 const {
     SlashCommandBuilder,
     PermissionFlagsBits,
+    EmbedBuilder,
 } = require("discord.js");
 
 const {
@@ -128,66 +129,64 @@ module.exports = {
                 const records = await listIgnored(guildId);
 
                 if (!records.length) {
-                    return interaction.editReply(
-                        "📭 No IDs are currently ignored in this server."
-                    );
+                    return interaction.editReply({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(0xED4245)
+                                .setTitle("🚫 BauaaCore • Ignore List")
+                                .setDescription("No IDs are currently ignored.")
+                                .setFooter({ text: "BauaaCore • Ignore Management" })
+                                .setTimestamp(),
+                        ],
+                    });
                 }
 
-                // Fetch webhook names once
-                let webhooks = new Map();
+                const visibleRecords = records.slice(0, 20);
 
-                if (records.some(record => record.type === "webhook")) {
-                    try {
-                        const fetchedWebhooks = await interaction.guild.fetchWebhooks();
-
-                        webhooks = new Map(
-                            fetchedWebhooks.map(webhook => [webhook.id, webhook.name])
-                        );
-                    } catch (error) {
-                        console.error("Webhook fetch error:", error.message);
-                    }
-                }
-
-                const visibleRecords = records.slice(0, 40);
-
-                const lines = await Promise.all(
+                const fields = await Promise.all(
                     visibleRecords.map(async (record, index) => {
                         let name = "Unknown User";
+                        let avatar = null;
 
                         if (record.type === "user" || record.type === "bot") {
                             try {
-                                const user = await interaction.client.users.fetch(
-                                    record.id
-                                );
-
+                                const user = await interaction.client.users.fetch(record.id);
                                 name = user.globalName || user.username;
+                                avatar = user.displayAvatarURL({ size: 128 });
                             } catch {
                                 name = "Unknown User";
                             }
                         }
 
                         if (record.type === "webhook") {
-                            name = webhooks.get(record.id) || "Unknown Webhook";
+                            try {
+                                const webhook = await interaction.guild.fetchWebhooks();
+                                name = webhook.get(record.id)?.name || "Unknown Webhook";
+                            } catch {
+                                name = "Unknown Webhook";
+                            }
                         }
 
-                        return (
-                            `**${index + 1}. ${record.type.toUpperCase()}**\n` +
-                            `👤 **Name:** ${name}\n` +
-                            `🆔 **ID:** \`${record.id}\``
-                        );
+                        return {
+                            name: `${index + 1}. ${record.type.toUpperCase()}`,
+                            value:
+                                `👤 **Name:** ${name}\n` +
+                                `🆔 **ID:** \`${record.id}\`\n` +
+                                `🔗 **Mention:** ${record.type !== "webhook" ? `<@${record.id}>` : "Not available"}`,
+                            inline: false,
+                        };
                     })
                 );
 
-                const remaining = records.length - visibleRecords.length;
+                const embed = new EmbedBuilder()
+                    .setColor(0x57F287)
+                    .setTitle(`🚫 BauaaCore • Ignore List (${records.length})`)
+                    .setDescription("These entities are excluded from supported logging events.")
+                    .addFields(fields)
+                    .setFooter({ text: "BauaaCore • Ignore Management" })
+                    .setTimestamp();
 
-                if (remaining > 0) {
-                    lines.push(`…and ${remaining} more.`);
-                }
-
-                return interaction.editReply(
-                    `**🚫 BauaaCore Ignore List (${records.length})**\n\n` +
-                    lines.join("\n\n")
-                );
+                return interaction.editReply({ embeds: [embed] });
             }
         } catch (error) {
             console.error("❌ Ignore command error:", error);
