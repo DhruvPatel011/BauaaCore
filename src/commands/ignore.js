@@ -182,7 +182,21 @@ module.exports = {
                     .setColor(0x57F287)
                     .setTitle(`🚫 BauaaCore • Ignore List (${records.length})`)
                     .setDescription("These entities are excluded from supported logging events.")
-                    .addFields(fields)
+                    .addFields(
+                                fields.flatMap((field, index) => {
+                                    const result = [field];
+
+                                    if (index < fields.length - 1) {
+                                        result.push({
+                                            name: "\u200B",
+                                            value: "\u200B",
+                                            inline: false,
+                                        });
+                                    }
+
+                                    return result;
+                                })
+                            )
                     .setFooter({ text: "BauaaCore • Ignore Management" })
                     .setTimestamp();
 
