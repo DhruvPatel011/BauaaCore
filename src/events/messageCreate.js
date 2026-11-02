@@ -1,27 +1,17 @@
 
-const {
-    getAIConfig,
-} = require("../ai/aiConfigManager");
+const { getAIConfig } = require("../ai/aiConfigManager");
 
 const {
     getConversation,
     saveConversation,
 } = require("../ai/conversationManager");
 
-const {
-    generateAIResponse,
-} = require("../ai/geminiClient");
+const { generateAIResponse } = require("../ai/geminiClient");
+const { buildSystemPrompt } = require("../ai/prompt");
 
-const {
-    buildSystemPrompt,
-} = require("../ai/prompt");
-
-// Per-user cooldown: 5 seconds
 const cooldowns = new Map();
-const COOLDOWN_TIME = 5000;
 
-// Discord message limit is 2000 characters.
-// Keep a margin for safe delivery.
+const COOLDOWN_TIME = 5000;
 const MAX_MESSAGE_LENGTH = 1900;
 
 function splitMessage(text, maxLength = MAX_MESSAGE_LENGTH) {
@@ -83,52 +73,46 @@ module.exports = {
     name: "messageCreate",
 
     async execute(message) {
+        if (!message.guild || message.author.bot || message.webhookId) {
+            return;
+        }
+
+        const userMessage = message.content.trim();
+
+        if (!userMessage) {
+            return;
+        }
+
         try {
-            // Ignore DMs, bots and webhook messages.
-            if (!message.guild || message.author.bot || message.webhookId) {
-                return;
-            }
-
-            // Ignore empty messages.
-            const userMessage = message.content.trim();
-
-            if (!userMessage) {
-                return;
-            }
-
-            // Load this server's AI configuration.
             const config = await getAIConfig(message.guild.id);
 
-            // Check whether AI is enabled.
             if (!config.enabled) {
                 return;
             }
 
-            // Only respond in configured AI channels.
             if (!config.channels.includes(message.channel.id)) {
                 return;
             }
 
-            // Apply per-user cooldown.
             if (isOnCooldown(message.guild.id, message.author.id)) {
                 return;
             }
 
             setCooldown(message.guild.id, message.author.id);
 
-            // Show typing indicator.
+            console.log(
+                `💬 AI Message | Server: ${message.guild.name} | User: ${message.author.tag}`
+            );
+
             await message.channel.sendTyping();
 
-            // Get the user's previous temporary conversation.
             const history = getConversation(
                 message.guild.id,
                 message.author.id
             );
 
-            // Generate system prompt based on server mood.
             const systemPrompt = buildSystemPrompt(config.mood);
 
-            // Generate response using Gemini.
             const aiResponse = await generateAIResponse({
                 history,
                 message: userMessage,
@@ -139,7 +123,6 @@ module.exports = {
                 throw new Error("AI returned an empty response.");
             }
 
-            // Save conversation only after successful generation.
             saveConversation(
                 message.guild.id,
                 message.author.id,
@@ -147,10 +130,8 @@ module.exports = {
                 aiResponse
             );
 
-            // Split long replies into Discord-safe chunks.
             const chunks = splitMessage(aiResponse);
 
-            // Send first part as a reply.
             if (chunks.length > 0) {
                 await message.reply({
                     content: chunks[0],
@@ -161,7 +142,6 @@ module.exports = {
                 });
             }
 
-            // Send remaining parts separately.
             for (let i = 1; i < chunks.length; i++) {
                 await message.channel.send({
                     content: chunks[i],
@@ -171,20 +151,30 @@ module.exports = {
                 });
             }
 
-        } catch (error) {
-            console.error("[AI Message Handler Error]", error);
+            console.log(
+                `✅ AI Reply Sent | User: ${message.author.tag} | Chunks: ${chunks.length}`
+            );
 
-            // Avoid exposing API or database error details to users.
+        } catch (error) {
+            console.error("❌ AI Message Handler Error:", {
+                name: error.name,
+                message: error.message,
+                status: error.status || error.code || "Unknown",
+            });
+
             try {
                 await message.reply({
-                    content: "Something went wrong while generating the AI response. Please try again later.",
+                    content: "⚠️ AI response generate nahi ho paya. Please thodi der baad try karo.",
                     allowedMentions: {
                         repliedUser: false,
                         parse: [],
                     },
                 });
             } catch (replyError) {
-                console.error("[AI Error Reply Failed]", replyError);
+                console.error(
+                    "❌ AI Error Reply Failed:",
+                    replyError.message
+                );
             }
         }
     },
