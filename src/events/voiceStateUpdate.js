@@ -1,57 +1,38 @@
+
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getDatabase } = require("../config/database");
 
-// Store when each user joined a voice channel
-const voiceSessions = new Map();
+// ========================================
+// TIME HELPERS
+// ========================================
 
 function getDuration(startTime) {
-    const durationMs = Date.now() - startTime;
+    const start = new Date(startTime).getTime();
 
-    const totalSeconds = Math.max(
-        0,
-        Math.floor(durationMs / 1000)
-    );
+    if (!Number.isFinite(start)) {
+        return "Unknown";
+    }
+
+    const durationMs = Math.max(0, Date.now() - start);
+    const totalSeconds = Math.floor(durationMs / 1000);
 
     const days = Math.floor(totalSeconds / 86400);
-
-    const hours = Math.floor(
-        (totalSeconds % 86400) / 3600
-    );
-
-    const minutes = Math.floor(
-        (totalSeconds % 3600) / 60
-    );
-
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
 
     const parts = [];
 
-    if (days > 0) {
-        parts.push(
-            `${days} day${days !== 1 ? "s" : ""}`
-        );
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+
+    if (seconds > 0 || parts.length === 0) {
+        parts.push(`${seconds}s`);
     }
 
-    if (hours > 0) {
-        parts.push(
-            `${hours} hour${hours !== 1 ? "s" : ""}`
-        );
-    }
-
-    if (minutes > 0) {
-        parts.push(
-            `${minutes} minute${minutes !== 1 ? "s" : ""}`
-        );
-    }
-
-    // Show seconds only when duration is less than 1 minute
-    if (seconds > 0 && parts.length === 0) {
-        parts.push(
-            `${seconds} second${seconds !== 1 ? "s" : ""}`
-        );
-    }
-
-    return parts.join(" ") || "Less than 1 second";
+    return parts.join(" ");
 }
 
 function getTime(date = new Date()) {
@@ -67,6 +48,46 @@ function getTime(date = new Date()) {
     }).format(date);
 }
 
+// ========================================
+// DATABASE HELPER
+// ========================================
+
+function getVoiceSessions() {
+    return getDatabase().collection("voice_sessions");
+}
+
+// ========================================
+// LOGGING HELPER
+// ========================================
+
+async function sendVoiceLog({
+    guild,
+    logChannel,
+    embed,
+    title,
+    description,
+    color,
+}) {
+    // Dedicated voice log
+    if (logChannel) {
+        await logChannel.send({
+            embeds: [embed],
+        });
+    }
+
+    // All logs
+    await sendAllLog({
+        guild,
+        title,
+        description,
+        color,
+    });
+}
+
+// ========================================
+// MAIN EVENT
+// ========================================
+
 module.exports = {
     name: "voiceStateUpdate",
 
@@ -75,33 +96,47 @@ module.exports = {
 
         if (!guild) return;
 
-        const logChannel = guild.channels.cache.find(
-            channel => channel.name === "vc-logs"
-        );
-
-        if (!logChannel) {
-            return;
-        }
-
         const member = newState.member || oldState.member;
 
-        if (!member) return;
+        if (!member || !member.user) return;
 
         const user = member.user;
 
         const oldChannel = oldState.channel;
         const newChannel = newState.channel;
 
-        // ==================================================
+        // Database
+        const sessions = getVoiceSessions();
+
+        // Voice log channel
+        const logChannel = guild.channels.cache.find(
+            channel => channel.name === "vc-logs"
+        );
+
+        const sessionKey = {
+            guildId: guild.id,
+            userId: user.id,
+        };
+
+        // ========================================
         // JOIN
-        // ==================================================
+        // ========================================
 
         if (!oldChannel && newChannel) {
-            voiceSessions.set(
-                `${guild.id}-${user.id}`,
+            const joinedAt = new Date();
+
+            await sessions.updateOne(
+                sessionKey,
                 {
-                    channelId: newChannel.id,
-                    joinedAt: Date.now(),
+                    $set: {
+                        guildId: guild.id,
+                        userId: user.id,
+                        channelId: newChannel.id,
+                        joinedAt,
+                    },
+                },
+                {
+                    upsert: true,
                 }
             );
 
@@ -124,20 +159,16 @@ module.exports = {
                     `\`${user.id}\`\n\n` +
 
                     `🕐 **Joined At**\n` +
-                    `${getTime()} IST`
+                    `${getTime(joinedAt)} IST`
                 )
                 .setFooter({
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🟢 Voice Channel Joined",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -152,20 +183,23 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // LEAVE
-        // ==================================================
+        // ========================================
 
         if (oldChannel && !newChannel) {
-            const sessionKey = `${guild.id}-${user.id}`;
-            const session = voiceSessions.get(sessionKey);
+            const session = await sessions.findOne(sessionKey);
 
             let duration = "Unknown";
 
-            if (session) {
+            if (session?.joinedAt) {
                 duration = getDuration(session.joinedAt);
-                voiceSessions.delete(sessionKey);
             }
+
+            // Remove completed session
+            await sessions.deleteOne(sessionKey);
+
+            const leftAt = new Date();
 
             const embed = new EmbedBuilder()
                 .setColor(0xED4245)
@@ -189,20 +223,16 @@ module.exports = {
                     `\`${user.id}\`\n\n` +
 
                     `🕐 **Left At**\n` +
-                    `${getTime()} IST`
+                    `${getTime(leftAt)} IST`
                 )
                 .setFooter({
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔴 Voice Channel Left",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -218,26 +248,43 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // MOVE
-        // ==================================================
+        // ========================================
 
         if (
             oldChannel &&
             newChannel &&
             oldChannel.id !== newChannel.id
         ) {
-            const sessionKey = `${guild.id}-${user.id}`;
+            const session = await sessions.findOne(sessionKey);
 
-            // Keep original join time
-            if (!voiceSessions.has(sessionKey)) {
-                voiceSessions.set(sessionKey, {
-                    channelId: newChannel.id,
-                    joinedAt: Date.now(),
-                });
+            if (session) {
+                // Preserve original join timestamp
+                await sessions.updateOne(
+                    sessionKey,
+                    {
+                        $set: {
+                            channelId: newChannel.id,
+                        },
+                    }
+                );
             } else {
-                const session = voiceSessions.get(sessionKey);
-                session.channelId = newChannel.id;
+                // No previous session available
+                await sessions.updateOne(
+                    sessionKey,
+                    {
+                        $set: {
+                            guildId: guild.id,
+                            userId: user.id,
+                            channelId: newChannel.id,
+                            joinedAt: new Date(),
+                        },
+                    },
+                    {
+                        upsert: true,
+                    }
+                );
             }
 
             const embed = new EmbedBuilder()
@@ -268,14 +315,10 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔄 Voice Channel Moved",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -291,9 +334,9 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // SERVER MUTE
-        // ==================================================
+        // ========================================
 
         if (
             !oldState.serverMute &&
@@ -324,14 +367,10 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔇 Member Server Muted",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -342,9 +381,9 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // SERVER UNMUTE
-        // ==================================================
+        // ========================================
 
         if (
             oldState.serverMute &&
@@ -375,14 +414,10 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔊 Member Server Unmuted",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -393,9 +428,9 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // SERVER DEAFEN
-        // ==================================================
+        // ========================================
 
         if (
             !oldState.serverDeaf &&
@@ -426,14 +461,10 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔕 Member Server Deafened",
                 description:
                     `👤 **User**\n${member}\n\n` +
@@ -444,9 +475,9 @@ module.exports = {
             return;
         }
 
-        // ==================================================
+        // ========================================
         // SERVER UNDEAFEN
-        // ==================================================
+        // ========================================
 
         if (
             oldState.serverDeaf &&
@@ -477,14 +508,10 @@ module.exports = {
                     text: "BauaaCore • Voice Logs",
                 });
 
-            // Detailed VC log
-            await logChannel.send({
-                embeds: [embed],
-            });
-
-            // Short all-logs entry
-            await sendAllLog({
+            await sendVoiceLog({
                 guild,
+                logChannel,
+                embed,
                 title: "🔔 Member Server Undeafened",
                 description:
                     `👤 **User**\n${member}\n\n` +
