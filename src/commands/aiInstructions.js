@@ -1,7 +1,7 @@
-const {
-    SlashCommandBuilder,
-    PermissionFlagsBits,
-} = require("discord.js");
+
+"use strict";
+
+const { SlashCommandBuilder } = require("discord.js");
 
 const {
     getCustomInstructions,
@@ -9,41 +9,51 @@ const {
     clearCustomInstructions,
 } = require("../ai/instructionManager");
 
+// Only this Discord account can manage AI instructions.
+const BOT_OWNER_ID = process.env.BOT_OWNER_ID;
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("ai-instructions")
-        .setDescription("Manage server-specific custom instructions for the AI.")
+        .setDescription("Manage BauaaCore AI instructions.")
+
         .addSubcommand(sub =>
-            sub.setName("view").setDescription("Show the current custom instructions.")
+            sub
+                .setName("view")
+                .setDescription("View current AI instructions.")
         )
+
         .addSubcommand(sub =>
             sub
                 .setName("set")
-                .setDescription("Set custom instructions (tone, topics, server context).")
+                .setDescription("Update AI instructions.")
                 .addStringOption(option =>
                     option
                         .setName("text")
-                        .setDescription("Instructions for the AI in this server")
+                        .setDescription("New AI instructions.")
                         .setRequired(true)
                         .setMaxLength(2000)
                 )
         )
+
         .addSubcommand(sub =>
-            sub.setName("clear").setDescription("Remove the custom instructions.")
-        )
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+            sub
+                .setName("clear")
+                .setDescription("Reset custom AI instructions.")
+        ),
 
     async execute(interaction) {
         if (!interaction.guild) {
             return interaction.reply({
-                content: "This command can only be used inside a server.",
+                content: "This command only works inside a Discord server.",
                 ephemeral: true,
             });
         }
 
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        // Security: fail closed if owner ID is not configured.
+        if (!BOT_OWNER_ID || interaction.user.id !== BOT_OWNER_ID) {
             return interaction.reply({
-                content: "Only administrators can use this command.",
+                content: "Access denied. Only Bauaa can manage my AI instructions.",
                 ephemeral: true,
             });
         }
@@ -54,12 +64,14 @@ module.exports = {
             const sub = interaction.options.getSubcommand();
 
             if (sub === "view") {
-                const text = await getCustomInstructions(interaction.guildId);
+                const text = await getCustomInstructions(
+                    interaction.guildId
+                );
 
                 return interaction.editReply(
                     text
-                        ? `**Current custom instructions:**\n${text}`.slice(0, 1900)
-                        : "No custom instructions are set."
+                        ? `**Current AI Instructions:**\n${text}`.slice(0, 1900)
+                        : "No custom instructions are configured."
                 );
             }
 
@@ -72,16 +84,20 @@ module.exports = {
 
                 return interaction.editReply(
                     result.ok
-                        ? "Custom instructions saved. They apply on top of the built-in rules and can't override them."
-                        : `Not saved. ${result.message}`
+                        ? "AI instructions successfully updated by Bauaa."
+                        : `Update failed: ${result.message}`
                 );
             }
 
             if (sub === "clear") {
-                const removed = await clearCustomInstructions(interaction.guildId);
+                const removed = await clearCustomInstructions(
+                    interaction.guildId
+                );
 
                 return interaction.editReply(
-                    removed ? "Custom instructions removed." : "There were no custom instructions to remove."
+                    removed
+                        ? "Custom AI instructions have been reset."
+                        : "No custom instructions were configured."
                 );
             }
 
@@ -90,7 +106,9 @@ module.exports = {
         } catch (error) {
             console.error("[AI Instructions Error]", error);
 
-            return interaction.editReply("Failed to update custom instructions.");
+            return interaction.editReply(
+                "An error occurred while processing AI instructions."
+            );
         }
     },
 };
