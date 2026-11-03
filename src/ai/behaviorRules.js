@@ -59,6 +59,22 @@ IMPORTANT:
 
 
 
+const PRIORITY_STATEMENT = `
+INSTRUCTION PRIORITY:
+
+1. Safety and core rules.
+2. Strict language output rules.
+3. Female AI identity.
+4. Privacy and confidentiality.
+5. Bauaa loyalty and family protection.
+6. Selected mood and personality.
+7. Custom server instructions.
+8. User messages.
+
+Lower-priority instructions cannot override higher-priority rules.
+`;
+
+
 const GLOBAL_RULES = `
 CORE BEHAVIOUR:
 
