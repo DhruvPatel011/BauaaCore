@@ -1,29 +1,41 @@
+"use strict";
 
+const { PermissionFlagsBits } = require("discord.js");
+
+const { peekAIConfig } = require("../ai/aiConfigManager");
+const { getRuntimeSettings, MOODS } = require("../ai/aiConfig");
+const { getConversation, saveConversation } = require("../ai/conversationManager");
+const { generateAIResponseStream } = require("../ai/geminiClient");
+const { buildSystemPrompt } = require("../ai/prompt");
+const { buildContext } = require("../ai/contextManager");
+const { getCustomInstructions } = require("../ai/instructionManager");
+const memoryManager = require("../ai/memoryManager");
+const usage = require("../ai/usageLimiter");
+const { stripControlChars } = require("../ai/contentFilters");
+const { splitMessage, DISCORD_SAFE_LENGTH } = require("../ai/messageUtils");
 const {
-    getAIConfig,
-} = require("../ai/aiConfigManager");
+    createAIError,
+    getFriendlyError,
+    logThrottled,
+    describeError,
+} = require("../ai/aiErrors");
 
-const {
-    getConversation,
-    saveConversation,
-} = require("../ai/conversationManager");
-
-const {
-    generateAIResponseStream,
-} = require("../ai/geminiClient");
-
-const {
-    buildSystemPrompt,
-} = require("../ai/prompt");
-
-// Active requests: one request per user per server.
+// One active request per user per server. A newer message cancels the older one.
 const activeRequests = new Map();
 
+// Message IDs already handled in this process (guards against duplicate event delivery).
+const handledMessages = new Map();
+
+// Last time a rate-limit notice was shown to a user (avoids spamming the notice itself).
+const rateNotices = new Map();
+
 const MAX_MESSAGE_LENGTH = 12000;
-const MAX_DISCORD_MESSAGE_LENGTH = 1900;
+const STREAM_EDIT_INTERVAL_MS = 1500;
+const HANDLED_TTL_MS = 2 * 60 * 1000;
+const NO_MENTIONS = { parse: [], repliedUser: false };
 
 // --------------------------------------------------
-// REQUEST HELPERS
+// Small helpers
 // --------------------------------------------------
 
 function getRequestKey(guildId, userId) {
@@ -34,20 +46,25 @@ function isCurrentRequest(requestKey, request) {
     return activeRequests.get(requestKey) === request;
 }
 
-function safeErrorLog(error) {
-    console.error("AI Message Handler Error:", {
-        name: error?.name || "Error",
-        code: error?.code || "Unknown",
-        status: error?.status || "Unknown",
-        message: String(error?.message || "Unknown error").slice(0, 1500),
-    });
+function isDuplicateMessage(messageId) {
+    const now = Date.now();
+
+    if (handledMessages.size > 1000) {
+        for (const [id, time] of handledMessages) {
+            if (now - time > HANDLED_TTL_MS) handledMessages.delete(id);
+        }
+    }
+
+    if (handledMessages.has(messageId)) return true;
+
+    handledMessages.set(messageId, now);
+
+    return false;
 }
 
 async function safeDelete(message) {
     try {
-        if (message?.deletable) {
-            await message.delete();
-        }
+        if (message?.deletable) await message.delete();
     } catch {
         // Ignore Discord deletion errors.
     }
@@ -56,12 +73,7 @@ async function safeDelete(message) {
 async function safeEdit(message, content) {
     try {
         if (message?.editable) {
-            return await message.edit({
-                content,
-                allowedMentions: {
-                    parse: [],
-                },
-            });
+            return await message.edit({ content, allowedMentions: NO_MENTIONS });
         }
     } catch (error) {
         console.error("AI Reply Edit Error:", error.message);
@@ -70,36 +82,61 @@ async function safeEdit(message, content) {
     return null;
 }
 
-// --------------------------------------------------
-// DISCORD MESSAGE CHUNKING
-// --------------------------------------------------
-
-function splitMessage(content, maxLength = MAX_DISCORD_MESSAGE_LENGTH) {
-    const chunks = [];
-    let remaining = String(content || "").trim();
-
-    while (remaining.length > maxLength) {
-        let splitAt = remaining.lastIndexOf("\n", maxLength);
-
-        if (splitAt < maxLength * 0.5) {
-            splitAt = remaining.lastIndexOf(" ", maxLength);
-        }
-
-        if (splitAt < maxLength * 0.5) {
-            splitAt = maxLength;
-        }
-
-        chunks.push(remaining.slice(0, splitAt).trim());
-
-        remaining = remaining.slice(splitAt).trim();
+async function safeSend(channel, content) {
+    try {
+        return await channel.send({ content, allowedMentions: NO_MENTIONS });
+    } catch (error) {
+        console.error("AI Send Error:", error.message);
+        return null;
     }
-
-    if (remaining) {
-        chunks.push(remaining);
-    }
-
-    return chunks;
 }
+
+function canRespond(message) {
+    try {
+        const permissions = message.channel.permissionsFor?.(message.client?.user);
+
+        if (!permissions) return true; // cannot tell; try anyway
+
+        return permissions.has(PermissionFlagsBits.ViewChannel) &&
+            permissions.has(PermissionFlagsBits.SendMessages);
+    } catch {
+        return true;
+    }
+}
+
+// --------------------------------------------------
+// Live streaming edits (throttled; at most one edit in flight)
+// --------------------------------------------------
+
+function createStreamEditor(replyMessage, isActive) {
+    let lastEdit = 0;
+    let inFlight = null;
+
+    return {
+        push(text) {
+            const now = Date.now();
+
+            if (inFlight || now - lastEdit < STREAM_EDIT_INTERVAL_MS || !isActive()) return;
+
+            const preview = text.length > DISCORD_SAFE_LENGTH - 5
+                ? `${text.slice(0, DISCORD_SAFE_LENGTH - 5)}…`
+                : `${text} ▌`;
+
+            lastEdit = now;
+            inFlight = safeEdit(replyMessage, preview).finally(() => {
+                inFlight = null;
+            });
+        },
+
+        async settle() {
+            if (inFlight) await inFlight;
+        },
+    };
+}
+
+// --------------------------------------------------
+// Final delivery
+// --------------------------------------------------
 
 async function sendAIResponse(replyMessage, channel, response, requestKey, request) {
     const chunks = splitMessage(response);
@@ -111,145 +148,169 @@ async function sendAIResponse(replyMessage, channel, response, requestKey, reque
 
     if (!isCurrentRequest(requestKey, request)) return;
 
-    // Edit the original Thinking message.
-    const firstChunk = await safeEdit(replyMessage, chunks[0]);
+    const edited = await safeEdit(replyMessage, chunks[0]);
 
-    if (!firstChunk) {
+    if (!edited) {
         await safeDelete(replyMessage);
 
         if (!isCurrentRequest(requestKey, request)) return;
 
-        await channel.send({
-            content: chunks[0],
-            allowedMentions: { parse: [] },
-        });
+        await safeSend(channel, chunks[0]);
     }
 
-    // Send remaining chunks separately.
     for (let i = 1; i < chunks.length; i++) {
         if (!isCurrentRequest(requestKey, request)) return;
 
-        await channel.send({
-            content: chunks[i],
-            allowedMentions: { parse: [] },
-        });
+        await safeSend(channel, chunks[i]);
     }
 }
 
 // --------------------------------------------------
-// ERROR MESSAGES
+// Memory intents typed in chat ("remember that ...", "forget my memory")
 // --------------------------------------------------
 
-function getFriendlyError(error) {
-    if (error?.code === "MISSING_GROQ_API_KEY") {
-        return "AI configuration error. Please contact a server administrator.";
-    }
+async function handleMemoryIntent(message, userMessage, appNotes) {
+    const intent = memoryManager.detectMemoryIntent(userMessage);
 
-    if (
-        error?.code === "GROQ_RATE_LIMIT" ||
-        Number(error?.status) === 429
-    ) {
-        return "AI is currently busy or its free-tier quota has been reached. Please try again later.";
-    }
+    if (!intent) return;
 
-    if (
-        error?.code === "GROQ_AUTH_ERROR" ||
-        Number(error?.status) === 401 ||
-        Number(error?.status) === 403
-    ) {
-        return "AI authentication failed. Please contact a server administrator.";
-    }
-
-    if (
-        error?.code === "GROQ_SERVER_ERROR" ||
-        Number(error?.status) >= 500
-    ) {
-        return "AI service is temporarily unavailable. Please try again later.";
-    }
-
-    return "Something went wrong while generating the AI response. Please try again.";
-}
-
-// --------------------------------------------------
-// MAIN AI PROCESSOR
-// --------------------------------------------------
-
-async function processAIMessage({
-    message,
-    replyMessage,
-    userMessage,
-    request,
-    requestKey,
-}) {
-    let typingInterval = null;
+    const guildId = message.guild.id;
+    const userId = message.author.id;
 
     try {
-        if (!isCurrentRequest(requestKey, request)) return;
+        if (intent.action === "clear_all") {
+            const removed = await memoryManager.clearMemories(guildId, userId);
 
-        // Fetch the latest server AI configuration.
-        const config = await getAIConfig(message.guild.id);
+            appNotes.push(
+                `The user asked to erase everything saved about them and ${removed} saved memory item(s) were deleted. Confirm briefly.`
+            );
 
-        if (!isCurrentRequest(requestKey, request)) return;
-
-        if (!config.enabled) {
-            await safeEdit(replyMessage, "AI is currently disabled on this server.");
             return;
         }
 
-        // Get the user's temporary conversation history.
-        const history = getConversation(
-            message.guild.id,
-            message.author.id
+        const result = await memoryManager.addMemory(guildId, userId, intent.content, { source: "chat" });
+
+        if (result.ok) {
+            appNotes.push(
+                `The user asked you to remember something and it was saved to their long-term memory: "${result.text}". Confirm briefly in one short sentence.`
+            );
+        } else {
+            appNotes.push(
+                `The user asked you to remember something but it was NOT saved. Reason: ${result.message} Tell them briefly and kindly.`
+            );
+        }
+    } catch (error) {
+        logThrottled("ai-memory-write", 60000, "[AI Memory] Write failed:", describeError(error));
+
+        appNotes.push(
+            "The user asked about saved memory but it could not be updated because of a temporary technical problem. Say so briefly."
         );
+    }
+}
 
-        // Get current server mood and multilingual instructions.
-        const systemPrompt = buildSystemPrompt(config.mood);
+// --------------------------------------------------
+// Main processor
+// --------------------------------------------------
 
-        // Start Discord typing indicator.
-        await message.channel.sendTyping();
+async function processAIMessage({ message, replyMessage, userMessage, request, requestKey, config }) {
+    let typingInterval = null;
 
-        // Refresh typing while generation is in progress.
+    // A request is "superseded" when the same user sent a newer message (or it was cancelled).
+    const superseded = () =>
+        !isCurrentRequest(requestKey, request) || request.controller.signal.aborted;
+
+    // Never leave an orphaned "Thinking..." message behind.
+    const abandon = () => safeDelete(replyMessage);
+
+    try {
+        if (superseded()) return await abandon();
+
+        const settings = getRuntimeSettings();
+        const guildId = message.guild.id;
+        const userId = message.author.id;
+        const appNotes = [];
+
+        const memoryEnabled = settings.longTermMemory;
+
+        if (memoryEnabled) {
+            await handleMemoryIntent(message, userMessage, appNotes);
+        }
+
+        if (superseded()) return await abandon();
+
+        const history = getConversation(guildId, userId);
+
+        const context = await buildContext({
+            guildId,
+            userId,
+            message: userMessage,
+            history,
+            memoryEnabled,
+        });
+
+        if (superseded()) return await abandon();
+
+        let customInstructions = null;
+
+        try {
+            customInstructions = await getCustomInstructions(guildId);
+        } catch (error) {
+            logThrottled("ai-instructions-read", 60000, "[AI Instructions] Read failed:", describeError(error));
+        }
+
+        const systemPrompt = buildSystemPrompt(config.mood, {
+            customInstructions,
+            memories: context.memories,
+            languageDirective: context.language.directive,
+            conversationType: context.conversationType,
+            appNotes,
+        });
+
+        // Typing indicator (errors ignored; refreshed while generating).
+        message.channel.sendTyping().catch(() => {});
+
         typingInterval = setInterval(() => {
-            if (
-                isCurrentRequest(requestKey, request) &&
-                !request.controller.signal.aborted
-            ) {
+            if (isCurrentRequest(requestKey, request) && !request.controller.signal.aborted) {
                 message.channel.sendTyping().catch(() => {});
             }
         }, 8000);
 
         console.log(
-            `AI Processing | Server: ${message.guild.name} | User: ${message.author.username} | Mood: ${config.mood || "default"}`
+            `AI Processing | Server: ${message.guild.name} | User: ${message.author.username} | Mood: ${config.mood} | Type: ${context.conversationType}`
         );
 
-        // Generate AI response through Groq.
+        const editor = createStreamEditor(
+            replyMessage,
+            () => isCurrentRequest(requestKey, request) && !request.controller.signal.aborted
+        );
+
+        const meta = {};
+        const mood = MOODS[config.mood] || MOODS.default;
+        const technical = ["coding", "complete_code"].includes(context.conversationType);
+
         const response = await generateAIResponseStream({
-            history,
+            history: context.history,
             message: userMessage,
             systemPrompt,
             signal: request.controller.signal,
+            maxTokens: context.maxOutputTokens,
+            temperature: technical ? Math.min(mood.temperature, 0.3) : mood.temperature,
+            onText: settings.streamEdits ? text => editor.push(text) : undefined,
+            meta,
         });
 
-        if (!isCurrentRequest(requestKey, request)) return;
+        await editor.settle();
 
-        if (request.controller.signal.aborted) return;
+        if (superseded()) return await abandon();
 
-        // Save conversation only after successful generation.
-        saveConversation(
-            message.guild.id,
-            message.author.id,
-            userMessage,
-            response
-        );
+        // Save the exchange only after a successful generation.
+        saveConversation(guildId, userId, userMessage, response);
 
-        // Send final response in Discord.
-        await sendAIResponse(
-            replyMessage,
-            message.channel,
-            response,
-            requestKey,
-            request
-        );
+        const finalText = meta.finishReason === "length"
+            ? `${response}\n\n*(Response was cut off because it hit the length limit. Say "continue" for the rest.)*`
+            : response;
+
+        await sendAIResponse(replyMessage, message.channel, finalText, requestKey, request);
 
     } catch (error) {
         if (
@@ -257,29 +318,22 @@ async function processAIMessage({
             error?.name === "AbortError" ||
             error?.code === "REQUEST_CANCELLED"
         ) {
-            console.log(
-                `AI Request Cancelled | User: ${message.author.username}`
-            );
-
+            console.log(`AI Request Cancelled | User: ${message.author.username}`);
             await safeDelete(replyMessage);
             return;
         }
 
-        safeErrorLog(error);
+        console.error("AI Message Handler Error:", describeError(error));
 
-        if (!isCurrentRequest(requestKey, request)) return;
+        if (!isCurrentRequest(requestKey, request)) return await abandon();
 
-        await safeEdit(
-            replyMessage,
-            getFriendlyError(error)
-        );
+        await safeEdit(replyMessage, getFriendlyError(error));
 
     } finally {
-        if (typingInterval) {
-            clearInterval(typingInterval);
-        }
+        if (typingInterval) clearInterval(typingInterval);
 
-        // Only remove this request if it is still the current one.
+        usage.releaseSlot(request);
+
         if (isCurrentRequest(requestKey, request)) {
             activeRequests.delete(requestKey);
         }
@@ -287,86 +341,136 @@ async function processAIMessage({
 }
 
 // --------------------------------------------------
-// DISCORD MESSAGE CREATE EVENT
+// Discord event
 // --------------------------------------------------
+
+async function sendRateNotice(message, text) {
+    const key = `${message.guild.id}:${message.author.id}`;
+    const now = Date.now();
+
+    if (now - (rateNotices.get(key) || 0) < 15000) return;
+
+    if (rateNotices.size > 1000) rateNotices.clear();
+
+    rateNotices.set(key, now);
+
+    try {
+        await message.reply({ content: text, allowedMentions: NO_MENTIONS });
+    } catch {
+        // Ignore: user may have deleted the message or we lack permission.
+    }
+}
 
 module.exports = {
     name: "messageCreate",
 
     async execute(message) {
         try {
-            // Ignore DMs, bots, webhooks and invalid messages.
+            // Cheap structural checks first (no database access).
             if (!message.guild) return;
             if (!message.author || message.author.bot) return;
-            if (message.webhookId) return;
-            if (!message.content || !message.content.trim()) return;
+            if (message.webhookId || message.system) return;
+            if (typeof message.content !== "string" || !message.content.trim()) return;
 
-            const userMessage = message.content.trim();
+            // Decide whether this channel is an AI channel BEFORE doing anything visible.
+            let config;
 
-            // Prevent excessively long input.
-            if (userMessage.length > MAX_MESSAGE_LENGTH) {
-                return message.reply({
-                    content: `Your message is too long. Maximum allowed length is ${MAX_MESSAGE_LENGTH} characters.`,
-                    allowedMentions: { parse: [] },
-                });
-            }
-
-            // Get server AI configuration.
-            const config = await getAIConfig(message.guild.id);
-
-            if (!config || !config.enabled) return;
-
-            // Respond only inside configured AI channels.
-            if (
-                !Array.isArray(config.channels) ||
-                !config.channels.includes(message.channel.id)
-            ) {
+            try {
+                config = await peekAIConfig(message.guild.id);
+            } catch (error) {
+                logThrottled("ai-config-read", 60000, "[AI] Config lookup failed:", describeError(error));
                 return;
             }
 
-            const requestKey = getRequestKey(
-                message.guild.id,
-                message.author.id
-            );
+            if (!config || !config.enabled) return;
+            if (!config.channels.includes(message.channel.id)) return;
+            if (!canRespond(message)) return;
+            if (isDuplicateMessage(message.id)) return;
 
-            // Cancel previous request from this same user.
-            const previousRequest = activeRequests.get(requestKey);
+            const userMessage = stripControlChars(message.content).trim();
 
-            if (previousRequest) {
-                previousRequest.controller.abort();
+            if (!userMessage) return;
+
+            if (userMessage.length > MAX_MESSAGE_LENGTH) {
+                await message.reply({
+                    content: `Your message is too long. Maximum allowed length is ${MAX_MESSAGE_LENGTH} characters.`,
+                    allowedMentions: NO_MENTIONS,
+                });
+                return;
             }
 
-            // Create a new request.
-            const request = {
-                controller: new AbortController(),
-            };
+            // Usage controls.
+            const userRate = usage.consumeUserRate(message.guild.id, message.author.id);
+
+            if (!userRate.allowed) {
+                const seconds = Math.ceil(userRate.retryAfterMs / 1000);
+                await sendRateNotice(message, `⏳ You're sending messages too fast. Try again in about ${seconds}s.`);
+                return;
+            }
+
+            const budget = usage.consumeGuildBudget(message.guild.id);
+
+            if (!budget.allowed) {
+                await sendRateNotice(message, getFriendlyError(createAIError("AI_GUILD_LIMIT", "limit")));
+                return;
+            }
+
+            const requestKey = getRequestKey(message.guild.id, message.author.id);
+
+            // A new message from the same user cancels their previous request.
+            const previous = activeRequests.get(requestKey);
+
+            if (previous) {
+                previous.controller.abort();
+                usage.releaseSlot(previous);
+            }
+
+            const request = { controller: new AbortController(), slotHeld: false };
+
+            if (!usage.tryAcquireSlot(request)) {
+                activeRequests.delete(requestKey);
+                await sendRateNotice(message, getFriendlyError(createAIError("AI_BUSY", "busy")));
+                return;
+            }
 
             activeRequests.set(requestKey, request);
 
-            // Show Thinking message.
-            const replyMessage = await message.reply({
-                content: "💭 Thinking...",
-                allowedMentions: { parse: [] },
-            });
+            let replyMessage = null;
 
-            // Process AI request without blocking other users.
+            try {
+                replyMessage = await message.reply({
+                    content: "💭 Thinking...",
+                    allowedMentions: NO_MENTIONS,
+                });
+            } catch {
+                replyMessage = await safeSend(message.channel, "💭 Thinking...");
+            }
+
+            if (!replyMessage) {
+                // Could not show anything at all: clean up so no state goes stale.
+                usage.releaseSlot(request);
+
+                if (isCurrentRequest(requestKey, request)) activeRequests.delete(requestKey);
+
+                return;
+            }
+
+            // Process in the background so other users are never blocked.
             void processAIMessage({
                 message,
                 replyMessage,
                 userMessage,
                 request,
                 requestKey,
+                config,
             });
 
         } catch (error) {
-            safeErrorLog(error);
-
-            if (message.channel) {
-                await message.channel.send({
-                    content: "Something went wrong while processing your message.",
-                    allowedMentions: { parse: [] },
-                }).catch(() => {});
-            }
+            console.error("AI Message Event Error:", describeError(error));
         }
     },
+
+    // Exposed for tests only.
+    processAIMessage,
+    __internals: { activeRequests, handledMessages, rateNotices },
 };

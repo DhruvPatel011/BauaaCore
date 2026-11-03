@@ -693,7 +693,7 @@ async function startBot() {
         await connectDatabase();
 
         console.log("🔐 Connecting to Discord Gateway...");
-
+v
         await client.login(process.env.DISCORD_TOKEN);
 
         console.log("✅ Discord Authentication Successful!");
