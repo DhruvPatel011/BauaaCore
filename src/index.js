@@ -39,6 +39,8 @@ const aiEnableCommand = require("./commands/aiEnable");
 const aiStatusCommand = require("./commands/aiStatus");
 const aiMoodCommand = require("./commands/aiMood");
 const aiResetCommand = require("./commands/aiReset");
+const aiMemoryCommand = require("./commands/aiMemory");
+const aiInstructionsCommand = require("./commands/aiInstructions");
 
 // Database and utilities
 const {
@@ -119,6 +121,8 @@ const commands = [
     aiStatusCommand,
     aiMoodCommand,
     aiResetCommand,
+    aiMemoryCommand,
+    aiInstructionsCommand,
 ];
 
 for (const command of commands) {
