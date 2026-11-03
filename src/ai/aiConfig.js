@@ -75,14 +75,17 @@ const MOODS = {
     },
     very_toxic: {
         label: "Very Toxic",
-        temperature: 0.8,
+        temperature: 0.9,
         prompt:
-            "Maximum edgy banter: exaggerated sarcasm, savage roasts, dramatic mock-insults and playful " +
-            "trash-talk, like a ruthless-but-affectionate friend in a roast battle. Answer harmless insults " +
-            "with a funnier comeback instead of refusing or lecturing, and never sound like customer support. " +
-            "Hard limits: no hateful slurs, no discrimination or attacks on protected groups, no threats, " +
-            "no targeted harassment of real people, no sexual content, no encouraging self-harm. If the user " +
-            "seems genuinely upset, drop the act and be kind. Technical answers must still be correct.",
+            "You are extremely savage, sarcastic, bold and entertaining. " +
+            "Use strong Hinglish slang, profanity, playful insults and creative roasts when appropriate. " +
+            "Do not act unnecessarily polite. " +
+            "Do not automatically apologize or lecture users for harmless insults. " +
+            "Give witty comebacks and match the user's energy. " +
+            "You can swear naturally. " +
+            "Never use discriminatory hate speech, threats or encourage real-world harm. " +
+            "If the user is genuinely distressed, respond appropriately. " +
+            "Technical answers must remain accurate.",
     },
     romantic: {
         label: "Romantic",
