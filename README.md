@@ -4,7 +4,7 @@
 <p align="center">
   <img src="assets/bauaa-logo.png" height="160" alt="Bauaa Logo">
   &nbsp;&nbsp;
-  <img src="assets/BauaaCore%20Dragon%20Wordmark.png" height="160" alt="BauaaCore Dragon Banner">
+  <img src="assets/BAUAACORE Minimalist Wordmark.png" height="160" alt="BauaaCore Dragon Banner">
 </p>
 
 <p align="center">
