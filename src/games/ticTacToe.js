@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const { ButtonStyle } = require("discord.js");
 const {
     REPLAY_BUTTON, RESULT_COLOR, button, gameCard, openGame, replayRow, replyPrivately, row,
@@ -21,8 +22,7 @@ function playTicTacToe(interaction, opponent) {
     const board = Array(9).fill("");
     const wins = [0, 0];
     const rematchVotes = new Set();
-    let startingPlayer = 0;
-    let turn = startingPlayer;
+    let turn;
     let accepted = false;
     let lastMove = -1;
     let winningLine = [];
@@ -72,8 +72,7 @@ function playTicTacToe(interaction, opponent) {
         winningLine = [];
         lastMove = -1;
         result = null;
-        startingPlayer = 1 - startingPlayer;
-        turn = startingPlayer;
+        turn = crypto.randomInt(players.length);
         return { message: showTurn() };
     }
 
@@ -87,6 +86,7 @@ function playTicTacToe(interaction, opponent) {
         }
         if (click.customId !== "accept") return "Accept the challenge to start.";
         accepted = true;
+        turn = crypto.randomInt(players.length);
         return { message: showTurn() };
     }
 

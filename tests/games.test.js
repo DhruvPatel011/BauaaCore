@@ -153,6 +153,11 @@ test("number guess hints higher or lower, rejects repeats, and stops after three
 
 test("Tic-Tac-Toe animates moves, highlights the winning line, and needs two votes for a rematch", async t => {
     t.mock.method(timers, "setTimeout", async () => {});
+    const starters = [0, 1];
+    t.mock.method(crypto, "randomInt", limit => {
+        assert.equal(limit, 2);
+        return starters.shift();
+    });
     const round = mockGame("tictactoe");
     await round.start();
     assert.deepEqual(round.deferred, {});
@@ -194,7 +199,8 @@ test("Tic-Tac-Toe animates moves, highlights the winning line, and needs two vot
     }
 });
 
-test("Tic-Tac-Toe serializes moves and removes controls at timeout", async () => {
+test("Tic-Tac-Toe serializes moves and removes controls at timeout", async t => {
+    t.mock.method(crypto, "randomInt", () => 0);
     const round = mockGame("tictactoe");
     await round.start();
     await round.click(OPPONENT, "accept");
@@ -210,19 +216,23 @@ test("Tic-Tac-Toe serializes moves and removes controls at timeout", async () =>
     assert.equal(round.buttons.length, 0);
 });
 
-test("Tic-Tac-Toe supports a draw and lets either player forfeit a rematch", async t => {
+test("Tic-Tac-Toe can pick O to start both rounds and supports draws and forfeits", async t => {
     t.mock.method(timers, "setTimeout", async () => {});
+    t.mock.method(crypto, "randomInt", () => 1);
     const round = mockGame("tictactoe");
     await round.start();
     await round.click(OPPONENT, "accept");
+    assert.match(round.text, /O to move/);
+    assert.match((await round.click(PLAYER, "cell:0")).content, /Wait for your turn/);
 
     for (const [turn, square] of [0, 1, 2, 4, 3, 5, 7, 6, 8].entries()) {
-        await round.click(turn % 2 === 0 ? PLAYER : OPPONENT, `cell:${square}`);
+        await round.click(turn % 2 === 0 ? OPPONENT : PLAYER, `cell:${square}`);
     }
     assert.match(round.frames.at(-1), /Board full/);
     assert.match(round.text, /It's a draw!/);
     await round.click(PLAYER, "game:again");
     await round.click(OPPONENT, "game:again");
+    assert.match(round.text, /O to move/);
     await round.click(PLAYER, "forfeit");
     assert.match(round.text, /forfeited/);
     assert.match(round.text, /O leads the session/);
