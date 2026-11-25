@@ -203,6 +203,16 @@ Zoya redacts recognized private information and credentials before sending chat 
 
 These three commands are restricted to the Discord account configured in `BOT_OWNER_ID`.
 
+### Games
+
+| Command | How to play |
+|---|---|
+| `/game rps` | Pick a hand, watch the reveal, and play another round on the same card. |
+| `/game guess` | Guess a number from 1 to 10 in three tries. The board updates after each higher or lower hint. |
+| `/game tictactoe opponent:@member` | Challenge a member on a board that highlights each move and the winning line. Both players can vote for a rematch. |
+
+Solo games are visible to the player who started them. A round expires after two minutes of inactivity, ten minutes total, or a bot restart.
+
 ### Command Interface
 
 Access BauaaCore's features directly through Discord's slash command interface.

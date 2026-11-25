@@ -29,6 +29,7 @@ if (!process.env.DISCORD_TOKEN) {
 const setupLogsCommand = require("./commands/setupLogs");
 const logsStatusCommand = require("./commands/logsStatus");
 const ignoreCommand = require("./commands/ignore");
+const gameCommand = require("./commands/game");
 
 // AI commands
 const aiSetupCommand = require("./commands/aiSetup");
@@ -113,6 +114,7 @@ const commands = [
     setupLogsCommand,
     logsStatusCommand,
     ignoreCommand,
+    gameCommand,
 
     // AI commands
     aiSetupCommand,
