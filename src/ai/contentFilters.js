@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Content filters shared by long-term memory and custom instructions.
+ * Content filters used by chat, long-term memory, and custom instructions.
  * These are heuristics, not a guarantee: they reduce the chance of storing
  * secrets / sensitive data or persisting prompt-injection text.
  */
@@ -9,8 +9,35 @@
 const CONTROL_CHARS =
     /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
+const PRIVATE_MARKER = "[private]";
+const PRIVATE_SETTINGS = ["DISCORD_TOKEN", "GROQ_API_KEY", "MONGODB_URI", "BOT_OWNER_ID"];
+const PRIVATE_DATA_PATTERNS = [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gi,
+    /\b(?:mongodb(?:\+srv)?|https?):\/\/[^/\s@:]+:[^/\s@]+@[^\s<>"'\x60]+/gi,
+    /\b(?:gsk_|sk[-_]|gh[pousr]_|github_pat_|xox[abprs]-)[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])/g,
+    /\b(?:mfa\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,})\b/g,
+    /\bBearer[ \t]+[A-Za-z0-9._~+/-]{8,}={0,2}/gi,
+    /\b(?:api[ _-]?key|secret|passw(?:or)?d|passcode|token|otp|cvv)\b[ \t]*(?:=|:|\bis\b)[ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|\x60[^\x60\r\n]+\x60|[^\s,;"'\x60]+)/gi,
+    /(?<![\p{L}\p{M}])(?:full name|real name|legal name|home address|street address|postal address|date of birth|dob|पूरा नाम|घर का पता|जन्मतिथि|પૂરું નામ|ઘરનું સરનામું|જન્મ તારીખ)[*_]{0,2}[ \t]*(?:=|:|is[ \t]+|hai[ \t]+|है[ \t]+|છે[ \t]+)[^\r\n]+/giu,
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    /\b[A-Z]{5}\d{4}[A-Z]\b/gi,
+    /(?<![\p{L}\p{Nd}])\+?(?:\(?\p{Nd}\)?[ \t.-]?){9,19}\p{Nd}(?![\p{L}\p{Nd}])/gu,
+];
+
 function stripControlChars(input) {
     return String(input ?? "").replace(CONTROL_CHARS, "");
+}
+
+function redactPrivateData(input) {
+    let text = stripControlChars(input);
+    for (const name of PRIVATE_SETTINGS) {
+        const value = process.env[name]?.trim();
+        if (value && value.length >= 8) text = text.replaceAll(value, PRIVATE_MARKER);
+    }
+    for (const pattern of PRIVATE_DATA_PATTERNS) {
+        text = text.replace(pattern, PRIVATE_MARKER);
+    }
+    return text;
 }
 
 function sanitizeSingleLine(input, maxLength = Infinity) {
@@ -62,7 +89,9 @@ function firstMatch(table, text) {
 }
 
 function findSecret(text) {
-    return firstMatch(SECRET_PATTERNS, text);
+    const value = stripControlChars(text);
+    return firstMatch(SECRET_PATTERNS, value) ||
+        (redactPrivateData(value) !== value ? "private information" : null);
 }
 
 function findSensitive(text) {
@@ -75,6 +104,7 @@ function findInjection(text) {
 
 module.exports = {
     stripControlChars,
+    redactPrivateData,
     sanitizeSingleLine,
     findSecret,
     findSensitive,

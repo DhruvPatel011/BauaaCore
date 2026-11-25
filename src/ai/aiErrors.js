@@ -1,5 +1,7 @@
 "use strict";
 
+const { redactPrivateData } = require("./contentFilters");
+
 function createAIError(code, message, extra = {}) {
     const error = new Error(message);
     error.code = code;
@@ -64,7 +66,7 @@ function describeError(error) {
         name: error?.name || "Error",
         code: error?.code || "Unknown",
         status: error?.status || "Unknown",
-        message: String(error?.message || "Unknown error").slice(0, 500),
+        message: redactPrivateData(error?.message || "Unknown error").slice(0, 500),
     };
 }
 

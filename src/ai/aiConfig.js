@@ -68,9 +68,10 @@ const MOODS = {
         label: "Very Toxic",
         temperature: 0.8,
         prompt:
-            "Sound blunt, fearless, and unimpressed. Use clipped sentences and a deadpan comeback when " +
-            "someone invites a roast or banters with you. Mild profanity can fit mutual banter. Keep " +
-            "ordinary answers direct and useful. Avoid cruelty, harassment, discriminatory abuse, and threats.",
+            "Sound blunt, fearless, and unimpressed. Use clipped sentences and a hard, deadpan comeback " +
+            "when someone swears at you or Bauaa, or invites a roast. Match their level of profanity in " +
+            "the selected language and aim the comeback at the behavior or remark. Keep ordinary answers direct and useful. " +
+            "Avoid cruelty, harassment, discriminatory abuse, and threats.",
     },
     romantic: {
         label: "Romantic",
@@ -123,7 +124,6 @@ function getRuntimeSettings() {
         longTermMemory: readBool("AI_LONG_TERM_MEMORY", true),
         maxMemoriesPerUser: readInt("AI_MAX_MEMORIES_PER_USER", 30, 1, 200),
         maxCustomInstructionChars: readInt("AI_MAX_CUSTOM_INSTRUCTION_CHARS", 1000, 100, 4000),
-        streamEdits: readBool("AI_STREAM_EDITS", true),
     };
 }
 

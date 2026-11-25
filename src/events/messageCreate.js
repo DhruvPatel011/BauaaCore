@@ -14,8 +14,8 @@ const { buildContext } = require("../ai/contextManager");
 const { getCustomInstructions } = require("../ai/instructionManager");
 const memoryManager = require("../ai/memoryManager");
 const usage = require("../ai/usageLimiter");
-const { stripControlChars } = require("../ai/contentFilters");
-const { splitMessage, DISCORD_SAFE_LENGTH } = require("../ai/messageUtils");
+const { redactPrivateData, stripControlChars } = require("../ai/contentFilters");
+const { splitMessage } = require("../ai/messageUtils");
 const {
     createAIError,
     getFriendlyError,
@@ -33,7 +33,6 @@ const handledMessages = new Map();
 const rateNotices = new Map();
 
 const MAX_MESSAGE_LENGTH = 12000;
-const STREAM_EDIT_INTERVAL_MS = 1500;
 const HANDLED_TTL_MS = 2 * 60 * 1000;
 const NO_MENTIONS = { parse: [], repliedUser: false };
 
@@ -89,7 +88,7 @@ async function safeEdit(message, content) {
             return await message.edit({ content, allowedMentions: NO_MENTIONS });
         }
     } catch (error) {
-        console.error("AI Reply Edit Error:", error.message);
+        console.error("AI Reply Edit Error:", describeError(error));
     }
 
     return null;
@@ -99,7 +98,7 @@ async function safeSend(channel, content) {
     try {
         return await channel.send({ content, allowedMentions: NO_MENTIONS });
     } catch (error) {
-        console.error("AI Send Error:", error.message);
+        console.error("AI Send Error:", describeError(error));
         return null;
     }
 }
@@ -115,36 +114,6 @@ function canRespond(message) {
     } catch {
         return true;
     }
-}
-
-// --------------------------------------------------
-// Live streaming edits (throttled; at most one edit in flight)
-// --------------------------------------------------
-
-function createStreamEditor(replyMessage, isActive) {
-    let lastEdit = 0;
-    let inFlight = null;
-
-    return {
-        push(text) {
-            const now = Date.now();
-
-            if (inFlight || now - lastEdit < STREAM_EDIT_INTERVAL_MS || !isActive()) return;
-
-            const preview = text.length > DISCORD_SAFE_LENGTH - 5
-                ? `${text.slice(0, DISCORD_SAFE_LENGTH - 5)}…`
-                : `${text} ▌`;
-
-            lastEdit = now;
-            inFlight = safeEdit(replyMessage, preview).finally(() => {
-                inFlight = null;
-            });
-        },
-
-        async settle() {
-            if (inFlight) await inFlight;
-        },
-    };
 }
 
 // --------------------------------------------------
@@ -255,12 +224,17 @@ async function processAIMessage({
 
         if (superseded()) return await abandon();
 
+        const ownerId = process.env.BOT_OWNER_ID?.trim();
+        const ownerTag = /^\d{17,20}$/.test(ownerId) ? new RegExp(`<@!?${ownerId}>`, "g") : null;
+        const chatText = ownerTag ? userMessage.replace(ownerTag, "Bauaa") : userMessage;
+        const bauaaMentioned = /\bbauaa\b/i.test(chatText) || Boolean(ownerTag && message.mentions?.users?.has(ownerId));
+        const safeUserMessage = redactPrivateData(chatText);
         const history = getConversation(guildId, userId);
 
         const context = await buildContext({
             guildId,
             userId,
-            message: userMessage,
+            message: safeUserMessage,
             history,
             memoryEnabled,
             language,
@@ -282,6 +256,7 @@ async function processAIMessage({
             languageDirective: context.language.directive,
             conversationType: context.conversationType,
             appNotes,
+            bauaaMentioned,
         });
 
         // Typing indicator (errors ignored; refreshed while generating).
@@ -294,38 +269,31 @@ async function processAIMessage({
         }, 8000);
 
         console.log(
-            `AI Processing | Server: ${message.guild.name} | User: ${message.author.username} | Mood: ${config.mood} | Type: ${context.conversationType}`
-        );
-
-        const editor = createStreamEditor(
-            replyMessage,
-            () => isCurrentRequest(requestKey, request) && !request.controller.signal.aborted
+            `AI Processing | Mood: ${config.mood} | Type: ${context.conversationType}`
         );
 
         const meta = {};
         const mood = MOODS[config.mood] || MOODS.default;
 
+        // Wait for a complete response so secrets split across chunks cannot reach Discord.
         const response = await generateAIResponseStream({
             history: context.history,
-            message: userMessage,
+            message: safeUserMessage,
             systemPrompt,
             signal: request.controller.signal,
             maxTokens: context.maxOutputTokens,
             temperature: mood.temperature,
-            onText: settings.streamEdits ? text => editor.push(text) : undefined,
             meta,
         });
 
-        await editor.settle();
-
         if (superseded()) return await abandon();
 
-        // Save the exchange only after a successful generation.
-        saveConversation(guildId, userId, userMessage, response);
+        const safeResponse = redactPrivateData(response);
+        saveConversation(guildId, userId, safeUserMessage, safeResponse);
 
         const finalText = meta.finishReason === "length"
-            ? `${response}\n\n${language.continuation}`
-            : response;
+            ? `${safeResponse}\n\n${language.continuation}`
+            : safeResponse;
 
         await sendAIResponse(replyMessage, message.channel, finalText, requestKey, request);
 
@@ -335,7 +303,7 @@ async function processAIMessage({
             error?.name === "AbortError" ||
             error?.code === "REQUEST_CANCELLED"
         ) {
-            console.log(`AI Request Cancelled | User: ${message.author.username}`);
+            console.log("AI Request Cancelled");
             await safeDelete(replyMessage);
             return;
         }

@@ -182,6 +182,10 @@ Log destinations are saved by channel ID. Existing private log channels are pick
 
 Zoya defaults to Roman Hinglish. Say `Hindi mein samjhao`, `Gujarati ma jawab aapo`, or `reply in English` for a single reply in that language. Say `switch to Gujarati` or `ab se Hindi mein baat karo` to keep that language for the current chat. `/ai-reset` clears the chat history and restores Hinglish. The server's selected mood applies in every language.
 
+Zoya recognizes Bauaa by name and by the Discord account configured in `BOT_OWNER_ID`. She backs him up in the selected mood. Very Toxic uses blunt comebacks and can match profanity when someone insults Bauaa or Zoya.
+
+Zoya redacts recognized private information and credentials before sending chat context to Groq. She keeps the typing indicator active while generating and screens the complete reply before posting it in Discord.
+
 ### AI Memory
 
 | Command | Description |
@@ -261,7 +265,7 @@ Copy [`.env.example`](.env.example) to `.env` and set the variables for your ins
 | `DISCORD_TOKEN` | Required at startup. Discord bot token. |
 | `MONGODB_URI` | Required at startup. Include the database name in the URI. |
 | `GROQ_API_KEY` | Required for AI replies. |
-| `BOT_OWNER_ID` | Discord user ID allowed to manage AI instructions. |
+| `BOT_OWNER_ID` | Bauaa's Discord user ID. Enables tag recognition and authorizes AI instruction management. |
 | `PORT` | Optional HTTP port. Defaults to `10000`. |
 
 **Important:** Never commit your `.env` file or expose your private API keys and bot token.

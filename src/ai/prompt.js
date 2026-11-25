@@ -1,11 +1,13 @@
 "use strict";
 
 const { MOODS } = require("./aiConfig");
+const { redactPrivateData } = require("./contentFilters");
 const { resolveLanguage } = require("./languageDetector");
 const {
     INTRO,
     PRIORITY_STATEMENT,
     GLOBAL_RULES,
+    BAUAA_RULES,
     LANGUAGE_RULES,
     RESPONSE_RULES,
     LENGTH_GUIDANCE,
@@ -13,7 +15,7 @@ const {
 
 // Prevent user-controlled text from faking prompt delimiters or role headers.
 function neutralize(text) {
-    return String(text ?? "")
+    return redactPrivateData(text)
         .replace(/<<<|>>>/g, "")
         .replace(/^\s*(system|assistant|developer)\s*:/gim, "$1 -")
         .trim();
@@ -28,6 +30,7 @@ function neutralize(text) {
  *   languageDirective  : string   per-message language decision
  *   conversationType   : string   key of LENGTH_GUIDANCE
  *   appNotes           : string[] notes written by the application for this turn
+ *   bauaaMentioned     : boolean the current Discord message names or tags Bauaa
  */
 function buildSystemPrompt(mood = "default", options = {}) {
     const {
@@ -36,6 +39,7 @@ function buildSystemPrompt(mood = "default", options = {}) {
         languageDirective = resolveLanguage().directive,
         conversationType = "",
         appNotes = [],
+        bauaaMentioned = false,
     } = options || {};
 
     const selectedMood = Object.hasOwn(MOODS, mood) ? MOODS[mood] : MOODS.default;
@@ -43,6 +47,7 @@ function buildSystemPrompt(mood = "default", options = {}) {
         INTRO,
         PRIORITY_STATEMENT,
         GLOBAL_RULES,
+        BAUAA_RULES,
         LANGUAGE_RULES,
         RESPONSE_RULES,
         `SERVER MOOD: ${selectedMood.label}\n${selectedMood.prompt}\nApply this mood in the selected response language. Maintain accuracy, relevance, respect and privacy.`,
@@ -73,6 +78,9 @@ function buildSystemPrompt(mood = "default", options = {}) {
     const turn = [];
 
     if (languageDirective) turn.push(`RESPONSE LANGUAGE FOR THIS MESSAGE: ${languageDirective}`);
+    if (bauaaMentioned) {
+        turn.push("BAUAA MENTIONED: The sender named or tagged Bauaa. Take a supportive stance and defend him if the message is disrespectful.");
+    }
     if (LENGTH_GUIDANCE[conversationType]) turn.push(`STYLE FOR THIS MESSAGE: ${LENGTH_GUIDANCE[conversationType]}`);
 
     for (const note of Array.isArray(appNotes) ? appNotes : []) {
