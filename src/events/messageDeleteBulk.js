@@ -5,6 +5,7 @@ const {
 } = require("discord.js");
 
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { isMessageIgnored } = require("../utils/ignoreManager");
 
 module.exports = {
@@ -23,7 +24,7 @@ module.exports = {
             const visibleMessages = [];
 
             for (const message of messages.values()) {
-                if (await isMessageIgnored(message)) {
+                if (await isMessageIgnored(message, guild.id)) {
                     continue;
                 }
 
@@ -38,9 +39,7 @@ module.exports = {
                 return;
             }
 
-            const logChannel = guild.channels.cache.find(
-                ch => ch.name === "deleted-msg-logs"
-            );
+            const logChannel = await getLogChannel(guild, "messages");
 
             if (!logChannel) {
                 console.log("❌ deleted-msg-logs channel not found");
@@ -118,7 +117,7 @@ module.exports = {
                 });
 
             // Dedicated log
-            await logChannel.send({
+            await sendConfiguredLog(guild, "messages", {
                 embeds: [embed],
             });
 

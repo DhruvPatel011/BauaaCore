@@ -28,7 +28,7 @@ require.cache[dbModulePath] = {
 const src = rel => require(path.join(__dirname, "../src", rel));
 
 const { MOODS, DEFAULT_CONFIG, getRuntimeSettings } = src("ai/aiConfig");
-const { detectLanguage, resolveLanguage, detectExplicitLanguageRequest } = src("ai/languageDetector");
+const { resolveLanguage, detectExplicitLanguageRequest } = src("ai/languageDetector");
 const { buildSystemPrompt } = src("ai/prompt");
 const { classifyMessage, selectHistory, buildContext } = src("ai/contextManager");
 const conversations = src("ai/conversationManager");
@@ -41,6 +41,7 @@ const { getFriendlyError } = src("ai/aiErrors");
 const { findSecret, findInjection } = src("ai/contentFilters");
 const client = src("ai/geminiClient");
 const messageCreate = src("events/messageCreate");
+const aiReset = src("commands/aiReset");
 
 const G1 = "111111111111111111";
 const G2 = "222222222222222222";
@@ -59,58 +60,50 @@ test.beforeEach(() => {
 // ======================================================
 // Language engine
 // ======================================================
-test("language: English / Hinglish / Hindi / Gujarati / Roman Gujarati / Urdu", () => {
-    assert.equal(detectLanguage("How are you?").key, "english");
-    assert.equal(detectLanguage("Bhai kya haal hai?").key, "hinglish");
-    assert.equal(detectLanguage("mujhe js seekhna hai").key, "hinglish");
-    assert.equal(detectLanguage("मुझे मदद चाहिए").key, "devanagari");
-    assert.equal(detectLanguage("મને મદદ જોઈએ છે").key, "gujarati");
-    assert.equal(detectLanguage("Mane help joie che").key, "roman_gujarati");
-    assert.equal(detectLanguage("السلام علیکم کیسے ہو").key, "arabic");
+test("language: Roman Hinglish is the default even for English, Hindi or Gujarati input", () => {
+    for (const message of ["How are you?", "Kya haal hai?", "मुझे मदद चाहिए", "મને મદદ જોઈએ છે", "Kem cho?"]) {
+        const language = resolveLanguage(message);
+        assert.equal(language.key, "hinglish", message);
+        assert.equal(language.explicit, null, message);
+        assert.match(language.directive, /Roman Hinglish/);
+    }
+    assert.match(buildSystemPrompt(), /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Roman Hinglish/);
 });
 
-test("language: Hinglish never produces a Devanagari directive; Roman Gujarati never Gujarati script", () => {
-    const hinglish = detectLanguage("bhai code fix kar de yaar").directive;
-    assert.match(hinglish, /Roman/);
-    assert.match(hinglish, /Do NOT use Devanagari/);
-    assert.match(detectLanguage("tame kem cho").directive, /Do NOT use Gujarati script/);
+test("language: recognizes Hindi and Gujarati requests in English, Roman and native scripts", () => {
+    for (const message of ["Reply in Hindi please", "Hinglish se alag. Hindi mein samjhao", "Hindi mein explain karo ye kya hai", "हिंदी में जवाब दो"]) {
+        assert.deepEqual(detectExplicitLanguageRequest(message), { language: "hindi", ongoing: false });
+        assert.match(resolveLanguage(message).directive, /Hindi using Devanagari/);
+    }
+    for (const message of ["Explain closures in Gujarati", "Gujrati ma jawab aapo", "ગુજરાતીમાં જવાબ આપો"]) {
+        assert.deepEqual(detectExplicitLanguageRequest(message), { language: "gujarati", ongoing: false });
+        assert.match(resolveLanguage(message).directive, /Gujarati using Gujarati script/);
+    }
+    assert.equal(resolveLanguage("Can you answer in English?").key, "english");
+    assert.equal(resolveLanguage("Hinglish please", "gujarati").key, "hinglish");
 });
 
-test("language: English with 'bhai' slang or code words stays English", () => {
-    assert.equal(detectLanguage("bhai fix this bug please").key, "english");
-    assert.equal(detectLanguage("how do I learn java").key, "english");
-    assert.equal(detectLanguage("```js\nconst kya = 1;\n``` what does this do").key, "english");
+test("language: detects ongoing switches and distinguishes them from a one-turn reply", () => {
+    for (const message of [
+        "Switch to Gujarati", "Zoya, ab se Gujarati mai baat krna",
+        "From now on, please answer in Gujarati", "Answer in Gujarati, from now on.",
+        "Can you keep speaking in Gujarati?", "હવેથી ગુજરાતીમાં વાત કરો",
+    ]) {
+        assert.deepEqual(detectExplicitLanguageRequest(message), { language: "gujarati", ongoing: true }, message);
+    }
+    assert.equal(resolveLanguage("aur detail batao", "gujarati").key, "gujarati");
+    assert.equal(resolveLanguage("reply in Hindi for this answer", "gujarati").key, "hindi");
+    assert.equal(resolveLanguage("what is Markdown?", "invalid").key, "hinglish");
 });
 
-test("language: explicit requests override detection; non-requests do not trigger", () => {
-    assert.equal(detectExplicitLanguageRequest("Reply in Hindi please").key, "hindi");
-    assert.equal(detectExplicitLanguageRequest("hindi me samjhao").key, "hindi");
-    assert.equal(detectExplicitLanguageRequest("english me bolo").key, "english");
-    assert.equal(detectExplicitLanguageRequest("how do you say hello in hindi"), null);
-    const resolved = resolveLanguage("explain closures, reply in Gujarati", []);
-    assert.match(resolved.directive, /explicitly asked for replies in Gujarati/);
-    assert.match(resolved.directive, /overrides automatic/);
-});
-
-test("language: explicit request stays sticky across later messages until changed", () => {
-    const history = [
-        { role: "user", parts: [{ text: "please reply in English only" }] },
-        { role: "model", parts: [{ text: "Sure." }] },
-    ];
-    const sticky = resolveLanguage("ab ye batao kya hai closure", history);
-    assert.equal(sticky.sticky, true);
-    assert.match(sticky.directive, /English/);
-    const changed = resolveLanguage("ab hindi me bolo", history);
-    assert.equal(changed.sticky, false);
-    assert.equal(changed.explicit.key, "hindi");
-});
-
-test("language: latest message wins over older history language", () => {
-    const history = [
-        { role: "user", parts: [{ text: "मुझे मदद चाहिए" }] },
-        { role: "model", parts: [{ text: "ज़रूर!" }] },
-    ];
-    assert.equal(resolveLanguage("How are you?", history).detected.key, "english");
+test("language: quoted examples, negation and translation do not switch the conversation", () => {
+    for (const message of [
+        "How do you say hello in Hindi?", "Don't reply in Hindi", "Hindi mein reply mat karo",
+        'My friend said "reply in Gujarati"', "> Reply in Hindi\nWhat does it mean?",
+        "```\nreply in Hindi\n```", "Translate ‘thank you’ into Gujarati",
+    ]) {
+        assert.equal(detectExplicitLanguageRequest(message), null, message);
+    }
 });
 
 // ======================================================
@@ -127,7 +120,7 @@ test("moods: all 10 exist, are distinct, and change the prompt + temperature", (
     for (const key of keys) {
         const prompt = buildSystemPrompt(key);
         assert.ok(prompt.includes(MOODS[key].prompt), `${key} prompt missing`);
-        assert.match(prompt, /never overrides language matching, accuracy, relevance or safety/);
+        assert.match(prompt, /Apply this mood in the selected response language/);
     }
 
     assert.notEqual(MOODS.professional.temperature, MOODS.very_toxic.temperature);
@@ -135,12 +128,11 @@ test("moods: all 10 exist, are distinct, and change the prompt + temperature", (
     assert.equal(DEFAULT_CONFIG.provider, "groq");
 });
 
-test("moods: very_toxic / savage keep hard safety limits and banter guidance", () => {
+test("moods: sharp responses use banter without harassment or threats", () => {
     const toxic = buildSystemPrompt("very_toxic", { conversationType: "banter" });
-    assert.match(toxic, /no hateful slurs/);
-    assert.match(toxic, /instead of refusing or lecturing/);
-    assert.match(toxic, /do not refuse harmless fun/);
-    assert.match(buildSystemPrompt("savage"), /Never cruel/);
+    assert.match(toxic, /Avoid cruelty, harassment, discriminatory abuse, and threats/);
+    assert.match(toxic, /when someone invites a roast or banters with you/);
+    assert.match(buildSystemPrompt("savage"), /teasing only in mutual banter/);
 });
 
 test("prompt: priority order and injection hardening", () => {
@@ -151,7 +143,8 @@ test("prompt: priority order and injection hardening", () => {
         conversationType: "greeting",
         appNotes: ["Saved memory."],
     });
-    const order = ["INSTRUCTION PRIORITY", "CORE RULES", "LANGUAGE RULES", "RESPONSE RULES",
+    const order = ["You are Zoya, a female AI chatbot", "INSTRUCTION PRIORITY", "CORE RULES",
+        "LANGUAGE RULES", "RESPONSE STYLE",
         "SERVER MOOD", "SERVER CUSTOM INSTRUCTIONS", "WHAT THE USER ASKED YOU TO REMEMBER", "THIS MESSAGE (decided"];
     let last = -1;
     for (const marker of order) {
@@ -731,6 +724,63 @@ test("handler: replies in the AI channel, saves history, cleans up all state", a
     assert.match(systemPrompt, /greeting/i);
 });
 
+test("handler: all ten server moods reach Groq with their own voice and temperature", async () => {
+    await setupGuild();
+    const requests = [];
+    mockCreate(async body => {
+        requests.push(body);
+        return streamOf(["Samajh gayi."]);
+    });
+
+    for (const [index, [key, mood]] of Object.entries(MOODS).entries()) {
+        await configManager.setAIMood(G1, key);
+        const message = makeMessage({
+            userId: String(444444444444444440n + BigInt(index)),
+            content: "Can you explain how JavaScript closures work?",
+        });
+        await messageCreate.execute(message);
+        await waitIdle();
+        const request = requests.at(-1);
+        assert.equal(request.temperature, mood.temperature, key);
+        assert.ok(request.messages[0].content.includes(mood.prompt), key);
+        assert.match(request.messages[0].content, /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Roman Hinglish/);
+    }
+    assert.equal(requests.length, Object.keys(MOODS).length);
+});
+
+test("handler: language requests work for one reply or the conversation and are isolated per user", async () => {
+    await setupGuild("teacher");
+    const prompts = [];
+    mockCreate(async body => {
+        prompts.push(body.messages[0].content);
+        return streamOf(["Ready"]);
+    });
+    async function chat(content, directive, userId = U1) {
+        const message = makeMessage({ content, userId });
+        await messageCreate.execute(message);
+        await waitIdle();
+        const prompt = prompts.at(-1);
+        assert.ok(prompt.includes(MOODS.teacher.prompt));
+        assert.match(prompt, directive);
+    }
+
+    const hinglish = /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Roman Hinglish/;
+    const hindi = /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Hindi using Devanagari/;
+    const gujarati = /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Gujarati using Gujarati script/;
+    await chat("Gujarati ma jawab aapo", gujarati);
+    await chat("What about an example?", hinglish);
+    await chat("From now on, reply in Gujarati", gujarati);
+    assert.deepEqual(await memory.listMemories(G1, U1), []);
+    await chat("What about an example?", hinglish, U2);
+    await chat("Hindi mein samjhao", hindi);
+    await chat("Give a second example", gujarati);
+    assert.equal(conversations.getConversationLanguage(G2, U1), undefined);
+
+    const reset = await aiReset.execute({ guild: { id: G1 }, guildId: G1, user: { id: U1 }, reply: async reply => reply });
+    assert.match(reset.content, /Hinglish/);
+    await chat("What about an example?", hinglish);
+});
+
 test("handler: ignores bots, DMs, webhooks, other channels, disabled guilds and unconfigured guilds", async () => {
     await setupGuild();
     let calls = 0;
@@ -847,7 +897,7 @@ test("handler: length-cut answers get a notice; failed Thinking reply falls back
     const cut = makeMessage();
     await messageCreate.execute(cut);
     await waitIdle();
-    assert.match(cut.replyObj.content, /cut off/);
+    assert.match(cut.replyObj.content, /Reply ka baaki hissa reh gaya/);
 
     mockCreate(async () => streamOf(["fine"]));
     const fallback = makeMessage({ userId: U2, replyFails: true });
@@ -903,7 +953,7 @@ test("handler: custom instructions reach the prompt below the core rules", async
     mockCreate(async (body) => { prompt = body.messages[0].content; return streamOf(["ok"]); });
     await messageCreate.execute(makeMessage({ content: "what is a fork in chess?" }));
     await waitIdle();
-    assert.ok(prompt.indexOf("CORE RULES") < prompt.indexOf("chess club server"));
+    assert.match(prompt, /CORE RULES[\s\S]+chess club server/);
 });
 
 test("runtime settings: configurable and never unlimited", () => {

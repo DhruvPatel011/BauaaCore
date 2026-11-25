@@ -17,22 +17,28 @@ function isExpired(record, now = Date.now()) {
     return now - record.updatedAt > EXPIRY_TIME;
 }
 
-/** Returns a copy, so callers can never mutate stored history. */
-function getConversation(guildId, userId) {
-    const key = getKey(guildId, userId);
+function getConversationRecord(key) {
     const record = conversations.get(key);
-
-    if (!record) return [];
+    if (!record) return null;
 
     if (isExpired(record)) {
         conversations.delete(key);
-        return [];
+        return null;
     }
+    return record;
+}
 
-    return record.messages.map(message => ({
+/** Returns a copy, so callers can never mutate stored history. */
+function getConversation(guildId, userId) {
+    const record = getConversationRecord(getKey(guildId, userId));
+    return (record?.messages || []).map(message => ({
         role: message.role,
         parts: message.parts.map(part => ({ ...part })),
     }));
+}
+
+function getConversationLanguage(guildId, userId) {
+    return getConversationRecord(getKey(guildId, userId))?.language;
 }
 
 function clip(text) {
@@ -43,15 +49,7 @@ function clip(text) {
         : value;
 }
 
-function saveConversation(guildId, userId, userMessage, aiMessage) {
-    const key = getKey(guildId, userId);
-    const messages = getConversation(guildId, userId);
-
-    messages.push(
-        { role: "user", parts: [{ text: clip(userMessage) }] },
-        { role: "model", parts: [{ text: clip(aiMessage) }] }
-    );
-
+function storeConversation(key, messages, language) {
     // Keep memory bounded: drop the oldest conversation if we are at capacity.
     if (!conversations.has(key) && conversations.size >= MAX_CONVERSATIONS) {
         const oldestKey = conversations.keys().next().value;
@@ -62,8 +60,24 @@ function saveConversation(guildId, userId, userMessage, aiMessage) {
 
     conversations.set(key, {
         messages: messages.slice(-(MAX_EXCHANGES * 2)),
+        language,
         updatedAt: Date.now(),
     });
+}
+
+function setConversationLanguage(guildId, userId, language) {
+    const key = getKey(guildId, userId);
+    storeConversation(key, getConversationRecord(key)?.messages || [], language);
+}
+
+function saveConversation(guildId, userId, userMessage, aiMessage) {
+    const key = getKey(guildId, userId);
+    const record = getConversationRecord(key);
+    storeConversation(key, [
+        ...(record?.messages || []),
+        { role: "user", parts: [{ text: clip(userMessage) }] },
+        { role: "model", parts: [{ text: clip(aiMessage) }] },
+    ], record?.language);
 }
 
 function resetConversation(guildId, userId) {
@@ -100,6 +114,8 @@ sweeper.unref();
 
 module.exports = {
     getConversation,
+    getConversationLanguage,
+    setConversationLanguage,
     saveConversation,
     resetConversation,
     clearGuildConversations,

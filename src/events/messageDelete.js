@@ -1,6 +1,7 @@
 
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { isMessageIgnored } = require("../utils/ignoreManager");
 
 module.exports = {
@@ -18,9 +19,7 @@ module.exports = {
                 return;
             }
 
-            const logChannel = message.guild.channels.cache.find(
-                channel => channel.name === "deleted-msg-logs"
-            );
+            const logChannel = await getLogChannel(message.guild, "messages");
 
             if (!logChannel) return;
 
@@ -71,7 +70,7 @@ module.exports = {
                 });
 
             // Dedicated log
-            await logChannel.send({
+            await sendConfiguredLog(message.guild, "messages", {
                 embeds: [embed],
             });
 

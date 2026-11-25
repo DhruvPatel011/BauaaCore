@@ -27,6 +27,7 @@ if (!process.env.DISCORD_TOKEN) {
 
 // Existing commands
 const setupLogsCommand = require("./commands/setupLogs");
+const logsStatusCommand = require("./commands/logsStatus");
 const ignoreCommand = require("./commands/ignore");
 
 // AI commands
@@ -48,7 +49,8 @@ const {
     closeDatabase,
 } = require("./config/database");
 
-const { isIgnored } = require("./utils/ignoreManager");
+const { shouldSkipIgnoredEvent } = require("./utils/ignoreManager");
+const { createHealthHandler } = require("./utils/health");
 
 // ========================================
 // 📡 EVENT IMPORTS
@@ -109,6 +111,7 @@ client.commands = new Collection();
 const commands = [
     // Existing commands
     setupLogsCommand,
+    logsStatusCommand,
     ignoreCommand,
 
     // AI commands
@@ -140,82 +143,6 @@ for (const command of commands) {
 console.log(`📦 Loaded ${client.commands.size} Slash Commands Successfully!`);
 
 // ========================================
-// 🛡️ IGNORE MANAGER EVENT FILTER
-// ========================================
-
-async function shouldSkipIgnoredEvent(eventName, args) {
-    const candidates = new Set();
-
-    const add = (value) => {
-        if (
-            typeof value === "string" &&
-            /^\d{17,20}$/.test(value)
-        ) {
-            candidates.add(value);
-        }
-    };
-
-    const addMessage = (message) => {
-        if (!message) return;
-
-        add(message.webhookId);
-        add(message.author?.id);
-        add(message.user?.id);
-        add(message.member?.id);
-    };
-
-    const first = args[0];
-
-    if (
-        eventName === "messageDelete" ||
-        eventName === "messageUpdate"
-    ) {
-        addMessage(eventName === "messageUpdate" ? args[1] : first);
-        addMessage(first);
-
-    } else if (eventName === "messageDeleteBulk") {
-        for (const message of first?.values?.() || []) {
-            addMessage(message);
-        }
-
-    } else if (eventName.startsWith("guildMember")) {
-        add(first?.id);
-        add(first?.user?.id);
-
-    } else if (eventName.startsWith("guildBan")) {
-        add(first?.user?.id);
-
-    } else if (eventName === "voiceStateUpdate") {
-        add(args[0]?.id);
-        add(args[0]?.member?.id);
-        add(args[0]?.member?.user?.id);
-
-        add(args[1]?.id);
-        add(args[1]?.member?.id);
-        add(args[1]?.member?.user?.id);
-    }
-
-    const guild =
-        first?.guild ||
-        first?.member?.guild ||
-        args[1]?.guild ||
-        args[1]?.member?.guild;
-
-    if (!guild || candidates.size === 0) {
-        return false;
-    }
-
-    for (const id of candidates) {
-        if (await isIgnored(guild.id, id)) {
-            console.log(`⏭️ Ignored ${eventName} log for ID ${id}`);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// ========================================
 // 🔄 GENERIC EVENT REGISTRATION
 // ========================================
 
@@ -230,6 +157,7 @@ function registerEvent(eventName, handler, logger = null) {
                 `⚠️ Ignore check failed for ${eventName}:`,
                 error
             );
+            return;
         }
 
         if (logger) {
@@ -390,78 +318,7 @@ registerEvent(
 // 🌐 HTTP HEALTH SERVER
 // ========================================
 
-const server = http.createServer((req, res) => {
-    let pathname;
-
-    try {
-        pathname = new URL(
-            req.url,
-            `http://${req.headers.host || "localhost"}`
-        ).pathname;
-
-        // Remove trailing slashes safely
-        pathname = pathname.replace(/\/+$/, "") || "/";
-
-    } catch (error) {
-        res.writeHead(400, {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-store",
-        });
-
-        return res.end(JSON.stringify({
-            error: "Bad Request",
-        }));
-    }
-
-    // ❤️ Main health endpoint
-    if (pathname === "/" || pathname === "/health") {
-        const discordConnected = client.isReady();
-
-        res.writeHead(200, {
-            "Content-Type": "application/json; charset=utf-8",
-            "Cache-Control": "no-store",
-        });
-
-        return res.end(JSON.stringify({
-            service: "BauaaCore",
-            status: "running",
-            discord: discordConnected ? "connected" : "disconnected",
-            uptime: Math.floor(process.uptime()),
-            timestamp: new Date().toISOString(),
-        }));
-    }
-
-    // 🟢 Readiness endpoint
-    if (pathname === "/ready") {
-        const discordConnected = client.isReady();
-
-        res.writeHead(
-            discordConnected ? 200 : 503,
-            {
-                "Content-Type": "application/json; charset=utf-8",
-                "Cache-Control": "no-store",
-            }
-        );
-
-        return res.end(JSON.stringify({
-            service: "BauaaCore",
-            status: discordConnected ? "ready" : "not_ready",
-            discord: discordConnected ? "connected" : "disconnected",
-            timestamp: new Date().toISOString(),
-        }));
-    }
-
-    // ❓ Unknown routes
-    res.writeHead(404, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-    });
-
-    return res.end(JSON.stringify({
-        error: "Not Found",
-        path: pathname,
-    }));
-});
+const server = http.createServer(createHealthHandler(client));
 
 // ========================================
 // 🚨 HTTP SERVER ERROR HANDLING

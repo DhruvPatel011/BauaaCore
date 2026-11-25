@@ -4,7 +4,10 @@ const { PermissionFlagsBits } = require("discord.js");
 
 const { peekAIConfig } = require("../ai/aiConfigManager");
 const { getRuntimeSettings, MOODS } = require("../ai/aiConfig");
-const { getConversation, saveConversation } = require("../ai/conversationManager");
+const {
+    getConversation, getConversationLanguage, saveConversation, setConversationLanguage,
+} = require("../ai/conversationManager");
+const { resolveLanguage } = require("../ai/languageDetector");
 const { generateAIResponseStream } = require("../ai/geminiClient");
 const { buildSystemPrompt } = require("../ai/prompt");
 const { buildContext } = require("../ai/contextManager");
@@ -44,6 +47,16 @@ function getRequestKey(guildId, userId) {
 
 function isCurrentRequest(requestKey, request) {
     return activeRequests.get(requestKey) === request;
+}
+
+function cancelActiveRequest(guildId, userId) {
+    const key = getRequestKey(guildId, userId);
+    const request = activeRequests.get(key);
+    if (!request) return false;
+    activeRequests.delete(key);
+    request.controller.abort();
+    usage.releaseSlot(request);
+    return true;
 }
 
 function isDuplicateMessage(messageId) {
@@ -212,7 +225,9 @@ async function handleMemoryIntent(message, userMessage, appNotes) {
 // Main processor
 // --------------------------------------------------
 
-async function processAIMessage({ message, replyMessage, userMessage, request, requestKey, config }) {
+async function processAIMessage({
+    message, replyMessage, userMessage, request, requestKey, config, language = resolveLanguage(userMessage),
+}) {
     let typingInterval = null;
 
     // A request is "superseded" when the same user sent a newer message (or it was cancelled).
@@ -232,7 +247,9 @@ async function processAIMessage({ message, replyMessage, userMessage, request, r
 
         const memoryEnabled = settings.longTermMemory;
 
-        if (memoryEnabled) {
+        // A conversation language switch should not also become a saved memory.
+        const isLanguageSwitch = language.explicit?.ongoing && /^from now on\b/i.test(userMessage);
+        if (memoryEnabled && !isLanguageSwitch) {
             await handleMemoryIntent(message, userMessage, appNotes);
         }
 
@@ -246,6 +263,7 @@ async function processAIMessage({ message, replyMessage, userMessage, request, r
             message: userMessage,
             history,
             memoryEnabled,
+            language,
         });
 
         if (superseded()) return await abandon();
@@ -286,7 +304,6 @@ async function processAIMessage({ message, replyMessage, userMessage, request, r
 
         const meta = {};
         const mood = MOODS[config.mood] || MOODS.default;
-        const technical = ["coding", "complete_code"].includes(context.conversationType);
 
         const response = await generateAIResponseStream({
             history: context.history,
@@ -294,7 +311,7 @@ async function processAIMessage({ message, replyMessage, userMessage, request, r
             systemPrompt,
             signal: request.controller.signal,
             maxTokens: context.maxOutputTokens,
-            temperature: technical ? Math.min(mood.temperature, 0.3) : mood.temperature,
+            temperature: mood.temperature,
             onText: settings.streamEdits ? text => editor.push(text) : undefined,
             meta,
         });
@@ -307,7 +324,7 @@ async function processAIMessage({ message, replyMessage, userMessage, request, r
         saveConversation(guildId, userId, userMessage, response);
 
         const finalText = meta.finishReason === "length"
-            ? `${response}\n\n*(Response was cut off because it hit the length limit. Say "continue" for the rest.)*`
+            ? `${response}\n\n${language.continuation}`
             : response;
 
         await sendAIResponse(replyMessage, message.channel, finalText, requestKey, request);
@@ -415,35 +432,35 @@ module.exports = {
                 return;
             }
 
-            const requestKey = getRequestKey(message.guild.id, message.author.id);
+            const guildId = message.guild.id;
+            const userId = message.author.id;
+            const requestKey = getRequestKey(guildId, userId);
 
             // A new message from the same user cancels their previous request.
-            const previous = activeRequests.get(requestKey);
-
-            if (previous) {
-                previous.controller.abort();
-                usage.releaseSlot(previous);
-            }
+            cancelActiveRequest(guildId, userId);
 
             const request = { controller: new AbortController(), slotHeld: false };
 
             if (!usage.tryAcquireSlot(request)) {
-                activeRequests.delete(requestKey);
                 await sendRateNotice(message, getFriendlyError(createAIError("AI_BUSY", "busy")));
                 return;
             }
 
             activeRequests.set(requestKey, request);
+            const language = resolveLanguage(userMessage, getConversationLanguage(guildId, userId));
+            if (language.explicit?.ongoing) {
+                setConversationLanguage(guildId, userId, language.key);
+            }
 
             let replyMessage = null;
 
             try {
                 replyMessage = await message.reply({
-                    content: "💭 Thinking...",
+                    content: language.thinking,
                     allowedMentions: NO_MENTIONS,
                 });
             } catch {
-                replyMessage = await safeSend(message.channel, "💭 Thinking...");
+                replyMessage = await safeSend(message.channel, language.thinking);
             }
 
             if (!replyMessage) {
@@ -463,6 +480,7 @@ module.exports = {
                 request,
                 requestKey,
                 config,
+                language,
             });
 
         } catch (error) {
@@ -470,6 +488,7 @@ module.exports = {
         }
     },
 
+    cancelActiveRequest,
     // Exposed for tests only.
     processAIMessage,
     __internals: { activeRequests, handledMessages, rateNotices },

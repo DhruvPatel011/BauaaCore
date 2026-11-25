@@ -1,251 +1,93 @@
-
 "use strict";
 
-/**
- * BauaaCore Multilingual Language Detector
- *
- * INPUT:
- * - Understand messages written in any language.
- *
- * OUTPUT:
- * - English
- * - Hinglish (Roman Hindi + English)
- *
- * Rules:
- * - Hindi / Hinglish input -> Hinglish output.
- * - English input -> English output.
- * - Gujarati and all other languages -> English output.
- * - Never generate replies in a third language.
- */
+const DEFAULT_LANGUAGE = "hinglish";
 
-const SCRIPT_PATTERNS = [
-    {
-        key: "hindi",
-        regex: /[\u0900-\u097F]/g,
+const LANGUAGES = {
+    hinglish: {
+        directive: "Reply in natural Roman Hinglish. Write Hindi in Latin letters and blend in English naturally.",
+        thinking: "💭 Soch rahi hoon…",
+        continuation: '*(Reply ka baaki hissa reh gaya. Aage ke liye "continue, Hinglish please" likho.)*',
     },
-    {
-        key: "gujarati",
-        regex: /[\u0A80-\u0AFF]/g,
+    hindi: {
+        directive: "Reply in natural Hindi using Devanagari script. Use feminine Hindi grammar for yourself.",
+        thinking: "💭 सोच रही हूँ…",
+        continuation: '*(जवाब अधूरा रह गया। आगे के लिए "जारी रखो, हिंदी में जवाब दो" लिखें।)*',
     },
-    {
-        key: "other",
-        regex: /[\u0600-\u06FF\u0750-\u077F\u0980-\u09FF\u0B00-\u0D7F\u0E00-\u0E7F\u1100-\u11FF\u3040-\u30FF\u3400-\u9FFF\u0400-\u04FF\u0370-\u03FF\u0590-\u05FF]/g,
+    gujarati: {
+        directive: "Reply in natural Gujarati using Gujarati script. Use Gujarati vocabulary and grammar.",
+        thinking: "💭 વિચારી રહી છું…",
+        continuation: '*(જવાબ અધૂરો રહી ગયો. આગળ માટે "ચાલુ રાખો, ગુજરાતીમાં જવાબ આપો" લખો.)*',
     },
+    english: {
+        directive: "Reply in clear, natural English.",
+        thinking: "💭 Thinking…",
+        continuation: '*(Response was cut off. Say "continue, reply in English" for the rest.)*',
+    },
+};
+
+const ALIASES = {
+    hinglish: "hinglish", हिंग्लिश: "hinglish", हिंगलिश: "hinglish", હિંગ્લિશ: "hinglish",
+    hindi: "hindi", हिंदी: "hindi", हिन्दी: "hindi", હિન્દી: "hindi", હિંદી: "hindi",
+    gujarati: "gujarati", gujrati: "gujarati", गुजराती: "gujarati", ગુજરાતી: "gujarati",
+    english: "english", अंग्रेज़ी: "english", अंग्रेजी: "english", અંગ્રેજી: "english",
+};
+
+const NAME = `(?<language>${Object.keys(ALIASES).join("|")})`;
+const REQUEST_END = "(?:\\s+(?:only|please|pls|for this (?:reply|answer)))*$";
+const ONGOING_CUE = "from now on|going forward|ab se|aaj se|હવેથી|अब से";
+const ONGOING = new RegExp(`^(?:${ONGOING_CUE})[\\s,:-]+`, "u");
+const ONGOING_END = new RegExp(`[\\s,:-]+(?:${ONGOING_CUE})$`, "u");
+const PREFIX_COMMA = new RegExp(`(${ONGOING_CUE})[ \\t]*,[ \\t]*`, "gu");
+const SUFFIX_COMMA = new RegExp(`,[ \\t]*(?=(?:${ONGOING_CUE})[ \\t]*(?:[.!?;।\\n]|$))`, "gu");
+const POLITE_PREFIX = /^(?:(?:zoya|please|pls|kindly)\s+)+/u;
+const CLAUSE_BREAK = /[.!?;।,\n]+|\s+(?:and|aur|ane)\s+(?=(?:reply|respond|answer|speak|talk|switch)\b)/u;
+const REQUEST_PATTERNS = [
+    new RegExp(`^(?<ongoing>switch\\s+to|change\\s+(?:(?:the|your)\\s+)?(?:reply\\s+)?language\\s+to|(?:go\\s+)?back\\s+to)\\s+${NAME}${REQUEST_END}`, "u"),
+    new RegExp(`^(?:(?:can|could|would|will)\\s+you\\s+)?(?:(?<ongoing>always|keep)\\s+)?(?:reply(?:ing)?|respond(?:ing)?|answer(?:ing)?|speak(?:ing)?|talk(?:ing)?|chat(?:ting)?|write)\\s+(?:(?:to\\s+)?me\\s+)?(?:in\\s+)?${NAME}${REQUEST_END}`, "u"),
+    new RegExp(`^(?:explain|summari[sz]e|tell me)\\s+.+\\s+in\\s+${NAME}${REQUEST_END}`, "u"),
+    new RegExp(`^(?:in\\s+)?${NAME}\\s+(?:please|pls|only)$`, "u"),
+    new RegExp(`^${NAME}\\s+(?:mein|mai|main|me|ma|maa)\\s+(?:hi\\s+)?` +
+        "(?:(?:reply|respond|answer|explain|chat|talk|speak|baat|vaat|jawab)\\s+(?:karo|kro|kar|karna|krna|do|dena|aapo|apo)|" +
+        "(?:bolo|bol|batao|samjhao|samjavo|kaho|likho))(?:\\s+(?!mat\\b|nahin?\\b).*)?$", "u"),
+    new RegExp(`^${NAME}\\s*(?:में|मे|માં|મા)\\s+(?:ही\\s+|જ\\s+)?` +
+        "(?:बात करो|बात करें|जवाब दो|जवाब दें|बोलो|बताओ|बताइए|समझाओ|समझाइए|લખો|બોલો|વાત કરો|જવાબ આપો|સમજાવો|કહો)" +
+        "(?:\\s+.*)?$", "u"),
 ];
 
-const HINDI_WORDS = new Set([
-    "kya", "hai", "hain", "hoon", "hu", "nahi", "nahin", "nhi",
-    "kaise", "kese", "kaisa", "kyu", "kyun", "kyon",
-    "kab", "kahan", "kaha", "mujhe", "mujhko",
-    "mera", "meri", "mere", "tera", "teri", "tere",
-    "tumhara", "aapka", "aap", "tum", "tu",
-    "yeh", "ye", "woh", "wo", "iska", "uska",
-    "chahiye", "chahie", "accha", "acha", "achha",
-    "theek", "thik", "abhi", "bata", "batao",
-    "bolo", "bol", "karo", "karna", "kar", "kr",
-    "kiya", "karke", "kaam", "yaar", "yar",
-    "bhai", "kuch", "koi", "lekin", "magar",
-    "aur", "haan", "han", "toh", "matlab",
-    "kyunki", "wala", "wali", "raha", "rahi",
-    "rahe", "liye", "hua", "hoga", "hogi",
-    "sab", "sabko", "bahut", "bohot", "bhot",
-    "sirf", "phir", "fir", "pehle", "pahle",
-    "jao", "aao", "chalo", "dekh", "dekho",
-    "samajh", "samjha", "samjhao", "sahi",
-    "galat", "zyada", "jyada", "thoda",
-    "thodi", "likh", "likho", "likhna",
-    "bana", "banao", "dikha", "dikhao",
-    "mein", "mai", "me", "mujh", "apna",
-    "apni", "apne", "karna", "krega", "karega",
-    "kregi", "karegi", "kro", "krna",
-]);
-
-const GUJARATI_ROMAN_WORDS = new Set([
-    "che", "chhe", "chu", "chhu", "chho",
-    "shu", "mane", "tane", "tamne",
-    "mara", "mari", "maru", "tara",
-    "tari", "taru", "amne", "amara",
-    "joie", "joiye", "kem", "kevu",
-    "kevi", "kevo", "ame", "tame",
-    "nathi", "saru", "saras", "ane",
-    "thayu", "karvu", "maate", "aavjo",
-    "hatu", "hati", "kaho", "vaat",
-    "kyare", "ketlu", "ketla", "aave",
-    "aavyo", "gayo", "gayu", "aavu",
-]);
-
-function cleanMessage(text) {
-    return String(text ?? "")
-        .replace(/```[\s\S]*?```/g, " ")
-        .replace(/`[^`]*`/g, " ")
-        .replace(/https?:\/\/\S+/gi, " ")
-        .replace(/<a?:\w+:\d+>/g, " ")
-        .replace(/<[@#&!]+\d+>/g, " ")
+function detectExplicitLanguageRequest(text) {
+    const cleaned = String(text ?? "")
+        .toLowerCase()
+        .normalize("NFC")
+        .replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`/g, " ")
+        .replace(/^[ \t]*>>>[\s\S]*|^[ \t]*>.*$/gm, " ")
+        .replace(/“[^”]*”|"[^"\n]*"|https?:\/\/\S+|<[@#&!]+\d+>/g, " ")
+        .replace(PREFIX_COMMA, "$1 ")
+        .replace(SUFFIX_COMMA, " ")
         .trim();
-}
+    const clauses = cleaned.split(CLAUSE_BREAK);
+    let result = null;
 
-function countMatches(text, regex) {
-    return (text.match(regex) || []).length;
-}
-
-function getRomanLanguage(text) {
-    const words = text.toLowerCase().match(/[a-z]+/g) || [];
-
-    if (!words.length) {
-        return "english";
-    }
-
-    let hindiCount = 0;
-    let gujaratiCount = 0;
-
-    for (const word of words) {
-        if (GUJARATI_ROMAN_WORDS.has(word)) {
-            gujaratiCount++;
-        } else if (HINDI_WORDS.has(word)) {
-            hindiCount++;
+    for (const clause of clauses) {
+        const request = clause.trim().replace(/\s+/g, " ")
+            .replace(POLITE_PREFIX, "");
+        const ongoing = ONGOING.test(request) || ONGOING_END.test(request);
+        const command = request.replace(ONGOING, "").replace(ONGOING_END, "").trim().replace(POLITE_PREFIX, "");
+        for (const pattern of REQUEST_PATTERNS) {
+            const match = pattern.exec(command);
+            if (match) {
+                result = { language: ALIASES[match.groups.language], ongoing: ongoing || Boolean(match.groups.ongoing) };
+                break;
+            }
         }
     }
-
-    // Gujarati written in Roman letters always receives English output.
-    if (gujaratiCount >= 2 && gujaratiCount > hindiCount) {
-        return "english";
-    }
-
-    // Avoid classifying casual English containing only "bhai" as Hinglish.
-    const meaningfulHindiCount = words.filter(word =>
-        HINDI_WORDS.has(word) && word !== "bhai" && word !== "yar"
-    ).length;
-
-    const hindiRatio = meaningfulHindiCount / words.length;
-
-    if (
-        meaningfulHindiCount >= 2 ||
-        (meaningfulHindiCount >= 1 && hindiRatio >= 0.20)
-    ) {
-        return "hinglish";
-    }
-
-    return "english";
+    return result;
 }
 
-function createResult(key, label, directive, confidence) {
-    return {
-        key,
-        label,
-        outputLanguage: key,
-        directive,
-        confidence,
-    };
+function resolveLanguage(message, conversationLanguage) {
+    const explicit = detectExplicitLanguageRequest(message);
+    const key = explicit?.language || (Object.hasOwn(LANGUAGES, conversationLanguage)
+        ? conversationLanguage : DEFAULT_LANGUAGE);
+    return { key, explicit, ...LANGUAGES[key] };
 }
 
-function detectLanguage(text) {
-    const cleaned = cleanMessage(text);
-
-    const hindiCount = countMatches(
-        cleaned,
-        SCRIPT_PATTERNS[0].regex
-    );
-
-    const gujaratiCount = countMatches(
-        cleaned,
-        SCRIPT_PATTERNS[1].regex
-    );
-
-    const otherCount = countMatches(
-        cleaned,
-        SCRIPT_PATTERNS[2].regex
-    );
-
-    // Native Hindi / Devanagari input.
-    if (hindiCount > 0 && hindiCount >= gujaratiCount) {
-        return createResult(
-            "hinglish",
-            "Hindi",
-            "Reply ONLY in Hinglish using Roman (Latin) letters. Mix natural Hindi and English. Never use Devanagari.",
-            0.98
-        );
-    }
-
-    // Gujarati input: understand Gujarati, but reply in English.
-    if (gujaratiCount > 0) {
-        return createResult(
-            "english",
-            "Gujarati",
-            "Reply ONLY in English. Understand the Gujarati message fully, but do not reply in Gujarati.",
-            0.98
-        );
-    }
-
-    // Any other native script: English output.
-    if (otherCount > 0) {
-        return createResult(
-            "english",
-            "Other language",
-            "Reply ONLY in English. Understand the user's original language and intent before answering.",
-            0.95
-        );
-    }
-
-    // Detect Roman Hindi / Hinglish.
-    const romanLanguage = getRomanLanguage(cleaned);
-
-    if (romanLanguage === "hinglish") {
-        return createResult(
-            "hinglish",
-            "Hinglish",
-            "Reply ONLY in Hinglish using Roman (Latin) letters. Mix natural Hindi and English. Never use Devanagari.",
-            0.90
-        );
-    }
-
-    return createResult(
-        "english",
-        "English",
-        "Reply ONLY in English. Use natural, clear English.",
-        0.95
-    );
-}
-
-/**
- * Explicit language requests are intentionally not allowed
- * to override the two-language output policy.
- *
- * Kept as an exported helper for backward compatibility.
- */
-function detectExplicitLanguageRequest(text) {
-    const cleaned = cleanMessage(text);
-
-    const match = cleaned.match(
-        /\b(?:reply|respond|answer|speak|talk|write)\s+in\s+(english|hinglish|hindi|gujarati|spanish|french|german)\b/i
-    );
-
-    if (!match) return null;
-
-    return {
-        requested: match[1].toLowerCase(),
-        allowed: ["english", "hinglish"].includes(
-            match[1].toLowerCase()
-        ),
-    };
-}
-
-/**
- * Every message is detected independently.
- * Older conversation language never overrides the latest message.
- */
-function resolveLanguage(message, history = []) {
-    const detected = detectLanguage(message);
-
-    return {
-        detected,
-        explicit: detectExplicitLanguageRequest(message),
-        sticky: false,
-        directive: detected.directive,
-    };
-}
-
-module.exports = {
-    detectLanguage,
-    detectExplicitLanguageRequest,
-    resolveLanguage,
-};
+module.exports = { DEFAULT_LANGUAGE, detectExplicitLanguageRequest, resolveLanguage };

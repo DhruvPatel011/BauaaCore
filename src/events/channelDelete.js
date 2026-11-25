@@ -4,6 +4,7 @@ const {
 } = require("discord.js");
 
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 function getChannelType(channel) {
     switch (channel.type) {
@@ -49,9 +50,7 @@ module.exports = {
     async execute(channel) {
         if (!channel.guild) return;
 
-        const logChannel = channel.guild.channels.cache.find(
-            ch => ch.name === "channel-logs"
-        );
+        const logChannel = await getLogChannel(channel.guild, "channels");
 
         if (!logChannel) {
             return;
@@ -92,7 +91,7 @@ module.exports = {
                 text: `BauaaCore • Deleted at ${getTime()} IST`,
             });
 
-        await logChannel.send({
+        await sendConfiguredLog(channel.guild, "channels", {
             embeds: [embed],
         });
 

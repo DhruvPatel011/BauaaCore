@@ -1,6 +1,7 @@
 
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { getDatabase } = require("../config/database");
 const { isIgnored } = require("../utils/ignoreManager");
 
@@ -71,7 +72,7 @@ async function sendVoiceLog({
 }) {
     // Dedicated voice log
     if (logChannel) {
-        await logChannel.send({
+        await sendConfiguredLog(guild, "voice", {
             embeds: [embed],
         });
     }
@@ -117,9 +118,7 @@ module.exports = {
         const sessions = getVoiceSessions();
 
         // Voice log channel
-        const logChannel = guild.channels.cache.find(
-            channel => channel.name === "vc-logs"
-        );
+        const logChannel = await getLogChannel(guild, "voice");
 
         const sessionKey = {
             guildId: guild.id,

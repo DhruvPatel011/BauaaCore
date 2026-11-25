@@ -44,11 +44,18 @@ async function removeIgnored(guildId, id) {
     return result.deletedCount > 0;
 }
 
-async function listIgnored(guildId) {
-    return getCollection()
-        .find({ guildId })
-        .sort({ createdAt: -1 })
+async function listIgnored(guildId, page, pageSize) {
+    const collection = getCollection();
+    const filter = { guildId };
+    const total = await collection.countDocuments(filter);
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const records = page > pageCount || total === 0 ? [] : await collection
+        .find(filter)
+        .sort({ createdAt: -1, id: 1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
         .toArray();
+    return { records, total, pageCount };
 }
 
 // Deliberately checks ID regardless of stored type.
@@ -64,13 +71,13 @@ async function isIgnored(guildId, id) {
     return Boolean(record);
 }
 
-async function isMessageIgnored(message) {
-    if (!message?.guild) return false;
+async function isMessageIgnored(message, guildId = message?.guild?.id) {
+    if (!message || !guildId) return false;
 
     // Webhook ID
     if (message.webhookId) {
         const webhookIgnored = await isIgnored(
-            message.guild.id,
+            guildId,
             message.webhookId
         );
 
@@ -78,17 +85,78 @@ async function isMessageIgnored(message) {
     }
 
     // Author ID (normal user or bot)
-    if (message.author?.id) {
-        return isIgnored(
-            message.guild.id,
-            message.author.id
-        );
+    return isIgnored(guildId, message.author?.id || message.member?.id || message.user?.id);
+}
+
+async function shouldSkipIgnoredEvent(eventName, args) {
+    const candidates = new Set();
+
+    const add = (value) => {
+        if (
+            typeof value === "string" &&
+            /^\d{17,20}$/.test(value)
+        ) {
+            candidates.add(value);
+        }
+    };
+
+    const addMessage = (message) => {
+        if (!message) return;
+
+        add(message.webhookId);
+        add(message.author?.id);
+        add(message.user?.id);
+        add(message.member?.id);
+    };
+
+    const first = args[0];
+
+    if (
+        eventName === "messageDelete" ||
+        eventName === "messageUpdate"
+    ) {
+        addMessage(eventName === "messageUpdate" ? args[1] : first);
+        addMessage(first);
+
+    } else if (eventName.startsWith("guildMember")) {
+        add(first?.id);
+        add(first?.user?.id);
+
+    } else if (eventName.startsWith("guildBan")) {
+        add(first?.user?.id);
+
+    } else if (eventName === "voiceStateUpdate") {
+        add(args[0]?.id);
+        add(args[0]?.member?.id);
+        add(args[0]?.member?.user?.id);
+
+        add(args[1]?.id);
+        add(args[1]?.member?.id);
+        add(args[1]?.member?.user?.id);
+    }
+
+    const guild =
+        first?.guild ||
+        first?.member?.guild ||
+        args[1]?.guild ||
+        args[1]?.member?.guild;
+
+    if (!guild || candidates.size === 0) {
+        return false;
+    }
+
+    for (const id of candidates) {
+        if (await isIgnored(guild.id, id)) {
+            console.log(`⏭️ Ignored ${eventName} log for ID ${id}`);
+            return true;
+        }
     }
 
     return false;
 }
 
 module.exports = {
+    shouldSkipIgnoredEvent,
     addIgnored,
     removeIgnored,
     listIgnored,

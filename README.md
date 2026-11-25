@@ -75,7 +75,7 @@ Control which entities are excluded from server logging.
 
 ### 3. AI Assistant
 
-An AI-powered conversational assistant integrated with Discord using Groq.
+Zoya is BauaaCore's conversational AI chatbot in Discord, powered by Groq. She gives short, natural answers to everyday questions and uses examples or steps when a topic needs more explanation.
 
 - Configure AI-enabled channels.
 - Add or remove AI channels.
@@ -154,6 +154,9 @@ BauaaCore uses Discord slash commands to provide access to its features.
 | Command | Description |
 |---|---|
 | `/setup-logs` | Configure server logging channels |
+| `/logs-status` | Check saved log channels, visibility, and bot permissions |
+
+Log destinations are saved by channel ID. Existing private log channels are picked up when there is a single matching category and an unambiguous destination. Use `/logs-status` to check missing destinations, permissions, and explicit role or member access. Rerun `/setup-logs` to provision replacements for missing or public channels.
 
 ### Ignore Management
 
@@ -161,7 +164,7 @@ BauaaCore uses Discord slash commands to provide access to its features.
 |---|---|
 | `/ignore add` | Add a user, bot, or webhook to the ignore list |
 | `/ignore remove` | Remove an ignored entry |
-| `/ignore list` | View ignored entries |
+| `/ignore list [page]` | View ignored entries, 15 per page |
 
 ### AI Assistant
 
@@ -176,6 +179,8 @@ BauaaCore uses Discord slash commands to provide access to its features.
 | `/ai-status` | Check the assistant's status |
 | `/ai-mood` | Change the assistant's mood |
 | `/ai-reset` | Reset conversation context |
+
+Zoya defaults to Roman Hinglish. Say `Hindi mein samjhao`, `Gujarati ma jawab aapo`, or `reply in English` for a single reply in that language. Say `switch to Gujarati` or `ab se Hindi mein baat karo` to keep that language for the current chat. `/ai-reset` clears the chat history and restores Hinglish. The server's selected mood applies in every language.
 
 ### AI Memory
 
@@ -193,6 +198,8 @@ BauaaCore uses Discord slash commands to provide access to its features.
 | `/ai-instructions view` | View current AI instructions |
 | `/ai-instructions set` | Set custom AI instructions |
 | `/ai-instructions clear` | Clear custom AI instructions |
+
+These three commands are restricted to the Discord account configured in `BOT_OWNER_ID`.
 
 ### Command Interface
 
@@ -247,24 +254,35 @@ npm install
 
 ### 4. Configure Environment Variables
 
-Create a `.env` file in the root directory and configure the required environment variables.
+Copy [`.env.example`](.env.example) to `.env` and set the variables for your installation.
 
-```env
-DISCORD_TOKEN=your_discord_bot_token
-MONGODB_URI=your_mongodb_connection_string
-GROQ_API_KEY=your_groq_api_key
-```
-
-Use the actual variable names expected by your project configuration.
+| Variable | Purpose |
+|---|---|
+| `DISCORD_TOKEN` | Required at startup. Discord bot token. |
+| `MONGODB_URI` | Required at startup. Include the database name in the URI. |
+| `GROQ_API_KEY` | Required for AI replies. |
+| `BOT_OWNER_ID` | Discord user ID allowed to manage AI instructions. |
+| `PORT` | Optional HTTP port. Defaults to `10000`. |
 
 **Important:** Never commit your `.env` file or expose your private API keys and bot token.
 
 ### 5. Start the Bot
 
-Run the startup command configured in your project's `package.json`.
+```bash
+npm start
+```
 
----
+### Render and uptime monitoring
 
+Set the environment variables in the Render web service settings. Use `npm ci` for the build command and `npm start` for the start command. Render provides `PORT`.
+
+Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
+
+### Run the tests
+
+```bash
+npm test
+```
 
 ---
 

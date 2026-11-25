@@ -1,6 +1,7 @@
 
 const { EmbedBuilder, AuditLogEvent } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { channels } = require("../config/logs");
 const { isIgnored } = require("../utils/ignoreManager");
 
@@ -15,9 +16,7 @@ module.exports = {
     return;
 }
 
-        const logChannel = guild.channels.cache.find(
-            channel => channel.name === channels.moderation
-        );
+        const logChannel = await getLogChannel(guild, "moderation");
 
         if (!logChannel) {
             console.error(
@@ -80,7 +79,7 @@ module.exports = {
             });
 
         try {
-            await logChannel.send({ embeds: [embed] });
+            await sendConfiguredLog(guild, "moderation", { embeds: [embed] });
         } catch (error) {
             console.error("❌ Failed to send ban log:", error);
         }

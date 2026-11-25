@@ -12,6 +12,7 @@ const {
 } = require("../utils/ignoreManager");
 
 const ID_PATTERN = /^\d{17,20}$/;
+const PAGE_SIZE = 15;
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -58,6 +59,12 @@ module.exports = {
             subcommand
                 .setName("list")
                 .setDescription("Show ignored IDs in this server.")
+                .addIntegerOption(option =>
+                    option
+                        .setName("page")
+                        .setDescription("Page number (defaults to 1)")
+                        .setMinValue(1)
+                )
         ),
 
     async execute(interaction) {
@@ -126,9 +133,10 @@ module.exports = {
             }
 
             if (action === "list") {
-                const records = await listIgnored(guildId);
+                const page = interaction.options.getInteger("page") ?? 1;
+                const { records, total, pageCount } = await listIgnored(guildId, page, PAGE_SIZE);
 
-                if (!records.length) {
+                if (total === 0) {
                     return interaction.editReply({
                         embeds: [
                             new EmbedBuilder()
@@ -141,34 +149,33 @@ module.exports = {
                     });
                 }
 
-                const visibleRecords = records.slice(0, 20);
+                if (page > pageCount) {
+                    return interaction.editReply(`Choose a page from 1 to ${pageCount}.`);
+                }
+
+                const webhooks = records.some(record => record.type === "webhook")
+                    ? await interaction.guild.fetchWebhooks().catch(() => null)
+                    : null;
 
                 const fields = await Promise.all(
-                    visibleRecords.map(async (record, index) => {
+                    records.map(async (record, index) => {
                         let name = "Unknown User";
-                        let avatar = null;
 
                         if (record.type === "user" || record.type === "bot") {
                             try {
                                 const user = await interaction.client.users.fetch(record.id);
                                 name = user.globalName || user.username;
-                                avatar = user.displayAvatarURL({ size: 128 });
                             } catch {
                                 name = "Unknown User";
                             }
                         }
 
                         if (record.type === "webhook") {
-                            try {
-                                const webhook = await interaction.guild.fetchWebhooks();
-                                name = webhook.get(record.id)?.name || "Unknown Webhook";
-                            } catch {
-                                name = "Unknown Webhook";
-                            }
+                            name = webhooks?.get(record.id)?.name || "Unknown Webhook";
                         }
 
                         return {
-                            name: `${index + 1}. ${record.type.toUpperCase()}`,
+                            name: `${(page - 1) * PAGE_SIZE + index + 1}. ${record.type.toUpperCase()}`,
                             value:
                                 `👤 **Name:** ${name}\n` +
                                 `🆔 **ID:** \`${record.id}\`\n` +
@@ -180,24 +187,10 @@ module.exports = {
 
                 const embed = new EmbedBuilder()
                     .setColor(0x57F287)
-                    .setTitle(`🚫 BauaaCore • Ignore List (${records.length})`)
+                    .setTitle(`🚫 BauaaCore • Ignore List (${total})`)
                     .setDescription("These entities are excluded from supported logging events.")
-                    .addFields(
-                                fields.flatMap((field, index) => {
-                                    const result = [field];
-
-                                    if (index < fields.length - 1) {
-                                        result.push({
-                                            name: "\u200B",
-                                            value: "\u200B",
-                                            inline: false,
-                                        });
-                                    }
-
-                                    return result;
-                                })
-                            )
-                    .setFooter({ text: "BauaaCore • Ignore Management" })
+                    .addFields(fields)
+                    .setFooter({ text: `Page ${page} of ${pageCount} • Use /ignore list page:<number>` })
                     .setTimestamp();
 
                 return interaction.editReply({ embeds: [embed] });
@@ -206,7 +199,7 @@ module.exports = {
             console.error("❌ Ignore command error:", error);
 
             return interaction.editReply(
-                "❌ Could not update ignore list. Check MongoDB connection."
+                action === "list" ? "❌ Could not load the ignore list." : "❌ Could not update the ignore list."
             );
         }
     },

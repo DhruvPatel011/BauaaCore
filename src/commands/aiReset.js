@@ -3,11 +3,12 @@ const { SlashCommandBuilder } = require("discord.js");
 const {
     resetConversation,
 } = require("../ai/conversationManager");
+const { cancelActiveRequest } = require("../events/messageCreate");
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("ai-reset")
-        .setDescription("Reset your personal AI conversation memory."),
+        .setDescription("Reset your current Zoya chat and its language."),
 
     async execute(interaction) {
         if (!interaction.guild) {
@@ -17,15 +18,14 @@ module.exports = {
             });
         }
 
-        const wasReset = resetConversation(
-            interaction.guildId,
-            interaction.user.id
-        );
+        const { guildId, user } = interaction;
+        const cancelled = cancelActiveRequest(guildId, user.id);
+        const wasReset = resetConversation(guildId, user.id);
 
         return interaction.reply({
-            content: wasReset
-                ? "Your AI conversation memory has been reset successfully."
-                : "You don't have any active AI conversation memory.",
+            content: wasReset || cancelled
+                ? "Your Zoya chat was reset. The default language is Hinglish."
+                : "You don't have an active Zoya chat to reset.",
             ephemeral: true,
         });
     },

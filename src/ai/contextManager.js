@@ -19,7 +19,7 @@ const TUTORIAL_PATTERN =
 const EMOTIONAL_PATTERN =
     /\b(?:sad|depress(?:ed|ion)?|anxious|lonely|crying|stressed|hopeless|worthless|breakup|udaas|dukhi|akela|pareshan)\b/i;
 const FOLLOWUP_PATTERN =
-    /\b(?:isko|usko|iska|uska|wahi|wohi|pichle|previous|earlier|above|same|continue|aage|expand|improve|update|modify|rewrite|simplify|shorten|shorter|longer|short karo|chhota|bada karo|second|third|point \d)\b/i;
+    /\b(?:isko|usko|iska|uska|wahi|wohi|pichle|previous|earlier|above|same|continue|aage|expand|improve|update|modify|rewrite|simplify|shorten|shorter|longer|short karo|chhota|bada karo|second|third|point \d)\b|जारी रखो|ચાલુ રાખો/i;
 const GREETING_PATTERN =
     /^(?:hi+|hello+|hey+|hii+|yo+|sup|namaste|namaskar|kem cho|gm|gn|good (?:morning|evening|night|afternoon)|how are you|what'?s up|wassup|kya haal|kaise ho|bhai kya haal)\b/i;
 const BANTER_PATTERN =
@@ -159,9 +159,10 @@ function selectHistory(history, message, { type = "general", maxTokens = 3000 } 
 // Full context
 // --------------------------------------------------
 
-async function buildContext({ guildId, userId, message, history = [], memoryEnabled = true }) {
+async function buildContext({
+    guildId, userId, message, history = [], memoryEnabled = true, language = resolveLanguage(message),
+}) {
     const settings = getRuntimeSettings();
-    const language = resolveLanguage(message, history);
     const { type } = classifyMessage(message, { hasHistory: history.length > 0 });
     const selectedHistory = selectHistory(history, message, {
         type,

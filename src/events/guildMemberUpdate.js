@@ -1,4 +1,5 @@
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 const {
     EmbedBuilder,
@@ -140,16 +141,10 @@ module.exports = {
         // ==================================================
 
         const roleLogChannel =
-            newMember.guild.channels.cache.find(
-                channel =>
-                    channel.name === "role-logs"
-            );
+            await getLogChannel(newMember.guild, "roles");
 
         const moderationLogChannel =
-            newMember.guild.channels.cache.find(
-                channel =>
-                    channel.name === "kick-ban-logs"
-            );
+            await getLogChannel(newMember.guild, "moderation");
 
         // ==================================================
         // TIMEOUT DETECTION
@@ -243,7 +238,7 @@ module.exports = {
                     });
 
                 // Detailed moderation log
-                await moderationLogChannel.send({
+                await sendConfiguredLog(newMember.guild, "moderation", {
                     embeds: [embed],
                 });
 
@@ -310,7 +305,7 @@ module.exports = {
                     });
 
                 // Detailed moderation log
-                await moderationLogChannel.send({
+                await sendConfiguredLog(newMember.guild, "moderation", {
                     embeds: [embed],
                 });
 
@@ -383,7 +378,7 @@ module.exports = {
                     });
 
                 // Detailed role log
-                await roleLogChannel.send({
+                await sendConfiguredLog(newMember.guild, "roles", {
                     embeds: [embed],
                 });
 
@@ -457,7 +452,7 @@ module.exports = {
                     });
 
                 // Detailed role log
-                await roleLogChannel.send({
+                await sendConfiguredLog(newMember.guild, "roles", {
                     embeds: [embed],
                 });
 

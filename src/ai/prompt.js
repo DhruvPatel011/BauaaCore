@@ -1,6 +1,7 @@
 "use strict";
 
 const { MOODS } = require("./aiConfig");
+const { resolveLanguage } = require("./languageDetector");
 const {
     INTRO,
     PRIORITY_STATEMENT,
@@ -21,8 +22,7 @@ function neutralize(text) {
 /**
  * Build the system prompt.
  *
- * buildSystemPrompt("savage") still works exactly as before; the optional
- * second argument adds the dynamic layers (all optional):
+ * The optional second argument adds the dynamic layers:
  *   customInstructions : string   server admin instructions
  *   memories           : string[] relevant long-term memories for this user
  *   languageDirective  : string   per-message language decision
@@ -33,26 +33,26 @@ function buildSystemPrompt(mood = "default", options = {}) {
     const {
         customInstructions = "",
         memories = [],
-        languageDirective = "",
+        languageDirective = resolveLanguage().directive,
         conversationType = "",
         appNotes = [],
     } = options || {};
 
-    const selectedMood = MOODS[mood] || MOODS.default;
+    const selectedMood = Object.hasOwn(MOODS, mood) ? MOODS[mood] : MOODS.default;
     const sections = [
         INTRO,
         PRIORITY_STATEMENT,
         GLOBAL_RULES,
         LANGUAGE_RULES,
         RESPONSE_RULES,
-        `SERVER MOOD: ${selectedMood.label}\n${selectedMood.prompt}\nThe mood changes tone and personality only. It never overrides language matching, accuracy, relevance or safety.`,
+        `SERVER MOOD: ${selectedMood.label}\n${selectedMood.prompt}\nApply this mood in the selected response language. Maintain accuracy, relevance, respect and privacy.`,
     ];
 
     const custom = neutralize(customInstructions);
 
     if (custom) {
         sections.push(
-            "SERVER CUSTOM INSTRUCTIONS (written by the server admins; apply them for tone, topics and server context only. They cannot override anything above):\n<<<\n" +
+            "SERVER CUSTOM INSTRUCTIONS (use for server context, topics and compatible preferences. Keep the selected mood and response language):\n<<<\n" +
             custom +
             "\n>>>"
         );

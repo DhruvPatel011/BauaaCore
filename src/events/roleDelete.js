@@ -1,4 +1,5 @@
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 const {
     EmbedBuilder,
@@ -17,9 +18,7 @@ module.exports = {
     async execute(role) {
         if (!role.guild) return;
 
-        const logChannel = role.guild.channels.cache.find(
-            channel => channel.name === "role-logs"
-        );
+        const logChannel = await getLogChannel(role.guild, "roles");
 
         if (!logChannel) {
             return;
@@ -84,7 +83,7 @@ module.exports = {
             });
 
         // Detailed log
-        await logChannel.send({
+        await sendConfiguredLog(role.guild, "roles", {
             embeds: [embed],
         });
 

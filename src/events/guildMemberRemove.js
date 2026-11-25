@@ -1,4 +1,5 @@
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 const {
     EmbedBuilder,
@@ -15,17 +16,11 @@ module.exports = {
         // LOG CHANNELS
         // ==================================================
 
-        const botLogChannel = guild.channels.cache.find(
-            channel => channel.name === "main-bots-logs"
-        );
+        const botLogChannel = await getLogChannel(guild, "bots");
 
-        const moderationLogChannel = guild.channels.cache.find(
-            channel => channel.name === "kick-ban-logs"
-        );
+        const moderationLogChannel = await getLogChannel(guild, "moderation");
 
-        const memberLogChannel = guild.channels.cache.find(
-            channel => channel.name === "members-log"
-        );
+        const memberLogChannel = await getLogChannel(guild, "members");
 
         // ==================================================
         // BOT REMOVED
@@ -136,7 +131,7 @@ module.exports = {
                 });
 
             // Detailed bot log
-            await botLogChannel.send({
+            await sendConfiguredLog(guild, "bots", {
                 embeds: [embed],
             });
 
@@ -255,7 +250,7 @@ module.exports = {
                 });
 
             // Detailed moderation log
-            await moderationLogChannel.send({
+            await sendConfiguredLog(guild, "moderation", {
                 embeds: [embed],
             });
 
@@ -343,7 +338,7 @@ module.exports = {
             });
 
         // Detailed member log
-        await memberLogChannel.send({
+        await sendConfiguredLog(guild, "members", {
             embeds: [embed],
         });
 

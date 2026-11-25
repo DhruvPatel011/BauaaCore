@@ -1,5 +1,6 @@
 const { EmbedBuilder, AuditLogEvent } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { isIgnored } = require("../utils/ignoreManager");
 
 module.exports = {
@@ -13,9 +14,7 @@ module.exports = {
     return;
 }
 
-        const logChannel = guild.channels.cache.find(
-            channel => channel.name === "kick-ban-logs"
-        );
+        const logChannel = await getLogChannel(guild, "moderation");
 
         if (!logChannel) return;
 
@@ -70,7 +69,7 @@ module.exports = {
             });
 
         // Detailed log
-        await logChannel.send({
+        await sendConfiguredLog(guild, "moderation", {
             embeds: [embed],
         });
 

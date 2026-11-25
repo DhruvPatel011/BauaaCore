@@ -96,8 +96,18 @@ function createFakeDb() {
                 let result = store.docs.filter(doc => matches(doc, filter)).map(doc => structuredClone(doc));
                 const cursor = {
                     sort(spec) {
-                        const [[field, dir]] = Object.entries(spec);
-                        result.sort((a, b) => (a[field] > b[field] ? 1 : a[field] < b[field] ? -1 : 0) * dir);
+                        const fields = Object.entries(spec);
+                        result.sort((a, b) => {
+                            for (const [field, direction] of fields) {
+                                if (a[field] > b[field]) return direction;
+                                if (a[field] < b[field]) return -direction;
+                            }
+                            return 0;
+                        });
+                        return cursor;
+                    },
+                    skip(n) {
+                        result = result.slice(n);
                         return cursor;
                     },
                     limit(n) {

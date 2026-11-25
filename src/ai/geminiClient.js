@@ -4,6 +4,8 @@
 
 const Groq = require("groq-sdk");
 const { getRuntimeSettings } = require("./aiConfig");
+const { buildSystemPrompt } = require("./prompt");
+const { resolveLanguage } = require("./languageDetector");
 const { createAIError, describeError } = require("./aiErrors");
 
 let groqClient = null;
@@ -178,8 +180,7 @@ async function generateAIResponseStream({
     const messages = [
         {
             role: "system",
-            content: systemPrompt ||
-                "You are BauaaCore. Match the latest user's language and writing style. Answer only what is asked, concisely.",
+            content: systemPrompt || buildSystemPrompt("default", { languageDirective: resolveLanguage(message).directive }),
         },
         ...normalizeHistory(history),
         { role: "user", content: message.trim() },

@@ -1,4 +1,5 @@
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 const {
     EmbedBuilder,
@@ -16,9 +17,7 @@ module.exports = {
         // ==================================================
 
         if (member.user.bot) {
-            const logChannel = guild.channels.cache.find(
-                channel => channel.name === "main-bots-logs"
-            );
+            const logChannel = await getLogChannel(guild, "bots");
 
             if (!logChannel) {
                 return;
@@ -103,7 +102,7 @@ module.exports = {
                 });
 
             // Detailed bot log
-            await logChannel.send({
+            await sendConfiguredLog(guild, "bots", {
                 embeds: [embed],
             });
 
@@ -128,9 +127,7 @@ module.exports = {
         // NORMAL MEMBER JOIN
         // ==================================================
 
-        const logChannel = guild.channels.cache.find(
-            channel => channel.name === "members-log"
-        );
+        const logChannel = await getLogChannel(guild, "members");
 
         if (!logChannel) {
             console.log(
@@ -187,7 +184,7 @@ module.exports = {
             });
 
         // Detailed member log
-        await logChannel.send({
+        await sendConfiguredLog(guild, "members", {
             embeds: [embed],
         });
 

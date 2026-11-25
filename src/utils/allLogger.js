@@ -1,6 +1,7 @@
 
 const { EmbedBuilder } = require("discord.js");
 const { isIgnored } = require("./ignoreManager");
+const { sendConfiguredLog } = require("./logger");
 
 async function sendAllLog({
     guild,
@@ -43,19 +44,6 @@ async function sendAllLog({
             }
         }
 
-        // Find all-logs channel
-        const logChannel = guild.channels.cache.find(
-            channel =>
-                channel.name === "all-logs" &&
-                channel.isTextBased() &&
-                typeof channel.send === "function"
-        );
-
-        if (!logChannel) {
-            console.log("❌ all-logs channel not found");
-            return false;
-        }
-
         // Indian Standard Time
         const time = new Intl.DateTimeFormat("en-IN", {
             timeZone: "Asia/Kolkata",
@@ -78,14 +66,12 @@ async function sendAllLog({
             });
 
         // Send log
-        await logChannel.send({
+        return await sendConfiguredLog(guild, "all", {
             embeds: [embed],
             allowedMentions: {
                 parse: [],
             },
         });
-
-        return true;
 
     } catch (error) {
         console.error("❌ All Logger Error:", error);

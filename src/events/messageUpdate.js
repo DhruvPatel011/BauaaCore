@@ -1,5 +1,6 @@
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
+const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 
 module.exports = {
     name: "messageUpdate",
@@ -14,9 +15,7 @@ module.exports = {
         // Ignore messages where content did not actually change
         if (oldMessage.content === newMessage.content) return;
 
-        const logChannel = newMessage.guild.channels.cache.find(
-            channel => channel.name === "edited-msg-logs"
-        );
+        const logChannel = await getLogChannel(newMessage.guild, "editedMessages");
 
         if (!logChannel) {
             return;
@@ -64,7 +63,7 @@ module.exports = {
             });
 
         // Detailed log
-        await logChannel.send({
+        await sendConfiguredLog(newMessage.guild, "editedMessages", {
             embeds: [embed],
         });
 
