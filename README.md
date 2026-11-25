@@ -44,6 +44,8 @@ Built using Node.js, discord.js, MongoDB, and the Groq API.
 
 **Created and maintained by Bauaa.**
 
+> **Private educational use only.** [See license terms](#license).
+
 ---
 
 ## Features
@@ -128,10 +130,6 @@ BauaaCore connects Discord events and slash commands with its application servic
 ### System Architecture
 
 <img src="assets/BauaaCore%20System%20Architecture%20Flow.png" width="100%" alt="BauaaCore System Architecture">
-
-### System Overview
-
-<img src="assets/BauaaCore%20System%20Flow%20Infographic.png" width="100%" alt="BauaaCore System Flow">
 
 ### Main Components
 
@@ -311,13 +309,13 @@ This project is released under the **BauaaCore Educational Use License**.
 
 ### Key License Terms
 
-- **Educational Use:** Personal learning and non-commercial use are permitted.
-- **Commercial Use:** Requires prior written permission from the copyright holder.
-- **Redistribution:** Redistribution of original or modified versions requires prior written permission.
-- **Attribution:** Original creator credit and copyright notices must be retained.
-- **Ownership:** All original intellectual property remains with Bauaa.
+- You may privately use, study, and modify BauaaCore for personal, non-commercial learning.
+- Get prior written permission from Bauaa before offering it for public use, using it commercially, or redistributing an original or modified copy.
+- Use BauaaCore at your own risk. It is provided as is, without warranty.
+- Keep Bauaa's credit and the copyright and license notices. Bauaa retains ownership of the project's original work.
+- Do not make false or misleading claims about BauaaCore's authorship, official status, endorsements, capabilities, or reliability.
 
-For complete terms, restrictions, and permissions, read the full license:
+Read the full license for the complete terms.
 
 <p align="center">
   <a href="LICENSE"><strong>View Full License</strong></a>
