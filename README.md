@@ -119,7 +119,7 @@ Interact with the AI assistant directly inside a configured Discord channel.
 
 The BauaaCore bot profile and its Discord identity.
 
-<img src="assets/Screenshot%202026-11-17%20092543.png" width="35%" alt="BauaaCore Bot Profile">
+<img src="assets/Screenshot%202026-11-17%20092543.png" width="100%" alt="BauaaCore Bot Profile">
 
 ---
 
