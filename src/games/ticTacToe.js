@@ -21,7 +21,6 @@ function playTicTacToe(interaction, opponent) {
     const board = Array(9).fill("");
     const wins = [0, 0];
     const rematchVotes = new Set();
-    let draws = 0;
     let startingPlayer = 0;
     let turn = startingPlayer;
     let accepted = false;
@@ -34,17 +33,19 @@ function playTicTacToe(interaction, opponent) {
             const style = winningLine.includes(index) || (index === lastMove && !result)
                 ? ButtonStyle.Success
                 : MARK_STYLES[mark];
-            return button(`cell:${index}`, mark || String(index + 1), style)
+            return button(`cell:${index}`, mark || "·", style)
                 .setDisabled(locked || Boolean(result) || Boolean(mark));
         });
         const rows = [0, 3, 6].map(index => row(...buttons.slice(index, index + 3)));
         if (!locked) {
-            const label = rematchVotes.size ? "Rematch 1/2" : "Rematch";
+            const label = rematchVotes.size ? "Accept rematch" : "Rematch";
             rows.push(result ? replayRow(label) : row(button("forfeit", "Forfeit", ButtonStyle.Danger)));
         }
+        const leader = wins[0] > wins[1] ? "X" : "O";
+        const footer = wins[0] === wins[1] ? "Session tied" : `${leader} leads the session`;
         return gameCard(THEME, `**X** <@${players[0]}>  ·  **O** <@${players[1]}>\n\n${status}`, {
             rows,
-            footer: `X wins ${wins[0]} · Draws ${draws} · O wins ${wins[1]}`,
+            footer,
             color,
         });
     }
@@ -131,7 +132,6 @@ function playTicTacToe(interaction, opponent) {
                 };
             }
             if (board.every(Boolean)) {
-                draws += 1;
                 result = { outcome: "draw", headline: "### It's a draw!" };
                 return {
                     frame: render("### Board full", { locked: true, color: RESULT_COLOR.draw }),
@@ -141,7 +141,7 @@ function playTicTacToe(interaction, opponent) {
             }
             turn = 1 - turn;
             return {
-                frame: render(`### ${mark} placed\nSquare **${square + 1}**`, { locked: true }),
+                frame: render(`### ${mark} placed`, { locked: true }),
                 revealAfter: 275,
                 message: showTurn(),
             };

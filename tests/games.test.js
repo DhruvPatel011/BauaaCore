@@ -161,7 +161,8 @@ test("Tic-Tac-Toe animates moves, highlights the winning line, and needs two vot
     assert.match((await round.click(PLAYER, "accept")).content, /invited player/);
 
     await round.click(OPPONENT, "accept");
-    assert.equal(round.buttons.filter(button => button.custom_id.startsWith("cell:")).length, 9);
+    const openingSquares = round.buttons.filter(button => button.custom_id.startsWith("cell:"));
+    assert.deepEqual(openingSquares.map(square => square.label), Array(9).fill("·"));
     assert.deepEqual(round.board.allowedMentions.parse, []);
     assert.match((await round.click(OPPONENT, "cell:0")).content, /Wait for your turn/);
     await round.click(PLAYER, "cell:0");
@@ -182,12 +183,15 @@ test("Tic-Tac-Toe animates moves, highlights the winning line, and needs two vot
 
     await round.click(PLAYER, "game:again");
     assert.match(round.text, /accept the rematch/);
-    assert.equal(round.buttons.find(button => button.custom_id === "game:again").label, "Rematch 1/2");
+    assert.equal(round.buttons.find(button => button.custom_id === "game:again").label, "Accept rematch");
     assert.match((await round.click(PLAYER, "game:again")).content, /Your vote is in/);
     await round.click(OPPONENT, "game:again");
     assert.match(round.text, /O to move/);
-    assert.match(round.text, /X wins 1 · Draws 0 · O wins 0/);
+    assert.match(round.text, /X leads the session/);
     assert.ok(round.buttons.every(button => !button.disabled));
+    for (const frame of [...round.frames, round.text]) {
+        assert.doesNotMatch(frame.replace(/<@\d+>/g, ""), /\d/);
+    }
 });
 
 test("Tic-Tac-Toe serializes moves and removes controls at timeout", async () => {
@@ -221,5 +225,5 @@ test("Tic-Tac-Toe supports a draw and lets either player forfeit a rematch", asy
     await round.click(OPPONENT, "game:again");
     await round.click(PLAYER, "forfeit");
     assert.match(round.text, /forfeited/);
-    assert.match(round.text, /X wins 0 · Draws 1 · O wins 1/);
+    assert.match(round.text, /O leads the session/);
 });
