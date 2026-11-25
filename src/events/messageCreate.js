@@ -15,7 +15,7 @@ const { getCustomInstructions } = require("../ai/instructionManager");
 const memoryManager = require("../ai/memoryManager");
 const usage = require("../ai/usageLimiter");
 const { redactPrivateData, stripControlChars } = require("../ai/contentFilters");
-const { splitMessage } = require("../ai/messageUtils");
+const { splitMessage, SHORT_CHAT_TYPES, formatShortChatReply } = require("../ai/messageUtils");
 const {
     createAIError,
     getFriendlyError,
@@ -82,18 +82,6 @@ async function safeDelete(message) {
     }
 }
 
-async function safeEdit(message, content) {
-    try {
-        if (message?.editable) {
-            return await message.edit({ content, allowedMentions: NO_MENTIONS });
-        }
-    } catch (error) {
-        console.error("AI Reply Edit Error:", describeError(error));
-    }
-
-    return null;
-}
-
 async function safeSend(channel, content) {
     try {
         return await channel.send({ content, allowedMentions: NO_MENTIONS });
@@ -120,30 +108,28 @@ function canRespond(message) {
 // Final delivery
 // --------------------------------------------------
 
-async function sendAIResponse(replyMessage, channel, response, requestKey, request) {
-    const chunks = splitMessage(response);
+async function sendAIResponse(message, response, requestKey, request) {
+    if (!isCurrentRequest(requestKey, request)) return;
 
-    if (!chunks.length) {
-        await safeEdit(replyMessage, "I couldn't generate a response. Please try again.");
+    const chunks = splitMessage(response);
+    const firstChunk = chunks.shift() || "I couldn't generate a response. Please try again.";
+    let sent;
+    try {
+        sent = await message.reply({ content: firstChunk, allowedMentions: NO_MENTIONS });
+    } catch {
+        if (isCurrentRequest(requestKey, request)) {
+            sent = await safeSend(message.channel, firstChunk);
+        }
+    }
+
+    if (!isCurrentRequest(requestKey, request)) {
+        await safeDelete(sent);
         return;
     }
 
-    if (!isCurrentRequest(requestKey, request)) return;
-
-    const edited = await safeEdit(replyMessage, chunks[0]);
-
-    if (!edited) {
-        await safeDelete(replyMessage);
-
+    for (const chunk of chunks) {
         if (!isCurrentRequest(requestKey, request)) return;
-
-        await safeSend(channel, chunks[0]);
-    }
-
-    for (let i = 1; i < chunks.length; i++) {
-        if (!isCurrentRequest(requestKey, request)) return;
-
-        await safeSend(channel, chunks[i]);
+        await safeSend(message.channel, chunk);
     }
 }
 
@@ -195,7 +181,7 @@ async function handleMemoryIntent(message, userMessage, appNotes) {
 // --------------------------------------------------
 
 async function processAIMessage({
-    message, replyMessage, userMessage, request, requestKey, config, language = resolveLanguage(userMessage),
+    message, userMessage, request, requestKey, config, language = resolveLanguage(userMessage),
 }) {
     let typingInterval = null;
 
@@ -203,11 +189,8 @@ async function processAIMessage({
     const superseded = () =>
         !isCurrentRequest(requestKey, request) || request.controller.signal.aborted;
 
-    // Never leave an orphaned "Thinking..." message behind.
-    const abandon = () => safeDelete(replyMessage);
-
     try {
-        if (superseded()) return await abandon();
+        if (superseded()) return;
 
         const settings = getRuntimeSettings();
         const guildId = message.guild.id;
@@ -222,7 +205,7 @@ async function processAIMessage({
             await handleMemoryIntent(message, userMessage, appNotes);
         }
 
-        if (superseded()) return await abandon();
+        if (superseded()) return;
 
         const ownerId = process.env.BOT_OWNER_ID?.trim();
         const ownerTag = /^\d{17,20}$/.test(ownerId) ? new RegExp(`<@!?${ownerId}>`, "g") : null;
@@ -240,7 +223,18 @@ async function processAIMessage({
             language,
         });
 
-        if (superseded()) return await abandon();
+        if (superseded()) return;
+
+        const shortChat = SHORT_CHAT_TYPES.has(context.conversationType);
+        const shortOptions = {
+            type: context.conversationType, language: language.key, mood: config.mood, bauaaMentioned,
+        };
+        if (context.conversationType === "dismissal") {
+            const response = formatShortChatReply("", shortOptions);
+            saveConversation(guildId, userId, safeUserMessage, response);
+            await sendAIResponse(message, response, requestKey, request);
+            return;
+        }
 
         let customInstructions = null;
 
@@ -249,6 +243,8 @@ async function processAIMessage({
         } catch (error) {
             logThrottled("ai-instructions-read", 60000, "[AI Instructions] Read failed:", describeError(error));
         }
+
+        if (superseded()) return;
 
         const systemPrompt = buildSystemPrompt(config.mood, {
             customInstructions,
@@ -286,16 +282,19 @@ async function processAIMessage({
             meta,
         });
 
-        if (superseded()) return await abandon();
+        if (superseded()) return;
 
-        const safeResponse = redactPrivateData(response);
-        saveConversation(guildId, userId, safeUserMessage, safeResponse);
+        const screened = redactPrivateData(response);
+        const chatReply = shortChat
+            ? formatShortChatReply(meta.finishReason === "length" ? "" : screened, shortOptions)
+            : screened;
+        saveConversation(guildId, userId, safeUserMessage, chatReply);
 
-        const finalText = meta.finishReason === "length"
-            ? `${safeResponse}\n\n${language.continuation}`
-            : safeResponse;
+        const finalText = !shortChat && meta.finishReason === "length"
+            ? `${chatReply}\n\n${language.continuation}`
+            : chatReply;
 
-        await sendAIResponse(replyMessage, message.channel, finalText, requestKey, request);
+        await sendAIResponse(message, finalText, requestKey, request);
 
     } catch (error) {
         if (
@@ -304,15 +303,12 @@ async function processAIMessage({
             error?.code === "REQUEST_CANCELLED"
         ) {
             console.log("AI Request Cancelled");
-            await safeDelete(replyMessage);
             return;
         }
 
         console.error("AI Message Handler Error:", describeError(error));
 
-        if (!isCurrentRequest(requestKey, request)) return await abandon();
-
-        await safeEdit(replyMessage, getFriendlyError(error));
+        if (!superseded()) await sendAIResponse(message, getFriendlyError(error), requestKey, request);
 
     } finally {
         if (typingInterval) clearInterval(typingInterval);
@@ -420,30 +416,9 @@ module.exports = {
                 setConversationLanguage(guildId, userId, language.key);
             }
 
-            let replyMessage = null;
-
-            try {
-                replyMessage = await message.reply({
-                    content: language.thinking,
-                    allowedMentions: NO_MENTIONS,
-                });
-            } catch {
-                replyMessage = await safeSend(message.channel, language.thinking);
-            }
-
-            if (!replyMessage) {
-                // Could not show anything at all: clean up so no state goes stale.
-                usage.releaseSlot(request);
-
-                if (isCurrentRequest(requestKey, request)) activeRequests.delete(requestKey);
-
-                return;
-            }
-
             // Process in the background so other users are never blocked.
             void processAIMessage({
                 message,
-                replyMessage,
                 userMessage,
                 request,
                 requestKey,

@@ -52,7 +52,8 @@ module.exports = {
                 .addFields(
                     { name: "AI Status", value: config.enabled ? "Enabled" : "Disabled", inline: true },
                     { name: "Provider", value: "Groq", inline: true },
-                    { name: "Model", value: settings.model, inline: true },
+                    { name: "Primary Model", value: settings.model, inline: true },
+                    { name: "Fallback Model", value: settings.fallbackModel || "Off", inline: true },
                     { name: "AI Mood", value: mood.label, inline: true },
                     { name: "Configured Channels", value: String(config.channels.length), inline: true },
                     { name: "Long-term Memory", value: settings.longTermMemory ? "On (opt-in per user)" : "Off", inline: true },

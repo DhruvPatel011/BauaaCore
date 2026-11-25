@@ -77,7 +77,7 @@ Control which entities are excluded from server logging.
 
 ### 3. AI Assistant
 
-Zoya is BauaaCore's conversational AI chatbot in Discord, powered by Groq. She gives short, natural answers to everyday questions and uses examples or steps when a topic needs more explanation.
+Zoya is BauaaCore's conversational AI chatbot in Discord, powered by Groq. Greetings, affection, and direct jabs get a short chat line. Longer questions can get steps or examples when the topic calls for them.
 
 - Configure AI-enabled channels.
 - Add or remove AI channels.
@@ -263,10 +263,15 @@ Copy [`.env.example`](.env.example) to `.env` and set the variables for your ins
 | `DISCORD_TOKEN` | Required at startup. Discord bot token. |
 | `MONGODB_URI` | Required at startup. Include the database name in the URI. |
 | `GROQ_API_KEY` | Required for AI replies. |
+| `GROQ_MODEL` | Primary Groq chat model. Defaults to `openai/gpt-oss-20b`. |
+| `GROQ_FALLBACK_MODEL` | Backup when the primary hits a Groq rate limit. Defaults to `openai/gpt-oss-120b`. Set an empty value to turn it off. |
+| `AI_GUILD_DAILY_LIMIT` | Optional per-server request cap. The default is 2,000 with a backup model and 1,000 with a single model. |
 | `BOT_OWNER_ID` | Bauaa's Discord user ID. Enables tag recognition and authorizes AI instruction management. |
 | `PORT` | Optional HTTP port. Defaults to `10000`. |
 
 **Important:** Never commit your `.env` file or expose your private API keys and bot token.
+
+When Groq returns HTTP `429` before a reply begins, Zoya tries the backup with the same API key and chat context. She skips models in cooldown for the time Groq specifies, or for 60 seconds if the response has no retry time. If both models are limited, Zoya shows a rate-limit message. Check the quotas for your organization in the [Groq console](https://console.groq.com/settings/limits).
 
 ### 5. Start the Bot
 

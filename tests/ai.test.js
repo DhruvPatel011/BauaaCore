@@ -1,6 +1,7 @@
 "use strict";
 
 process.env.GROQ_API_KEY = "test-key-not-real";
+process.env.GROQ_FALLBACK_MODEL = "";
 process.env.AI_MAX_RETRIES = "0";
 process.env.AI_REQUEST_TIMEOUT_MS = "1000";
 
@@ -170,6 +171,15 @@ test("classify: greeting / short question / coding / tutorial / follow-up / comp
     assert.notEqual(classifyMessage("usko improve karo", { hasHistory: false }).type, "followup");
     assert.equal(classifyMessage("i feel so lonely today").type, "emotional");
     assert.equal(classifyMessage("lol you are useless").type, "banter");
+});
+
+test("classify: affection, dismissals and direct jabs are distinct from detailed requests", () => {
+    assert.equal(classifyMessage("I love you babe").type, "affection");
+    assert.equal(classifyMessage("મને તમારું નામ કહો?").type, "short_question");
+    assert.equal(classifyMessage("Fuck off").type, "dismissal");
+    assert.equal(classifyMessage("Bauaa chutiya hain").type, "provocation");
+    assert.equal(classifyMessage("I love you babe, how do I cook rice?").type, "short_question");
+    assert.equal(classifyMessage("What does 'fuck off' mean?").type, "short_question");
 });
 
 function pair(u, a) {
@@ -654,6 +664,97 @@ test("groq: 5xx is retried exactly once (bounded) and then succeeds; 429 is neve
     }
 });
 
+test("groq: 429 switches to backup, skips the primary during cooldown, and later switches back", async t => {
+    let now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    const primary = "openai/gpt-oss-20b";
+    const fallback = "qwen/qwen3.8-27b";
+    process.env.GROQ_FALLBACK_MODEL = fallback;
+    t.after(() => { process.env.GROQ_FALLBACK_MODEL = ""; });
+
+    const requests = [];
+    mockCreate(async body => {
+        requests.push(body);
+        if (body.model === primary && requests.length === 1) {
+            throw Object.assign(new Error("limited"), { status: 429, headers: { "retry-after": "120" } });
+        }
+        return streamOf([body.model]);
+    });
+
+    const meta = {};
+    assert.equal(await client.generateAIResponseStream({ message: "hi", history: pair("q", "a"), meta }), fallback);
+    assert.equal(meta.model, fallback);
+    assert.deepEqual(requests.map(({ model }) => model), [primary, fallback]);
+    assert.deepEqual(requests[0].messages, requests[1].messages);
+    assert.equal(requests[0].reasoning_effort, "low");
+    assert.equal("reasoning_effort" in requests[1], false);
+
+    now += 119_000;
+    assert.equal(await client.generateAIResponseStream({ message: "hi" }), fallback);
+    assert.equal(requests.length, 3, "no new primary request during cooldown");
+
+    now += 1_000;
+    assert.equal(await client.generateAIResponseStream({ message: "hi" }), primary);
+    assert.equal(requests.length, 4);
+});
+
+test("groq: both models respect their cooldowns, and non-quota errors keep their original result", async t => {
+    const oldPrimary = process.env.GROQ_MODEL;
+    const primary = "test/primary-model";
+    const fallback = "test/backup-model";
+    process.env.GROQ_MODEL = primary;
+    process.env.GROQ_FALLBACK_MODEL = fallback;
+    t.after(() => {
+        if (oldPrimary === undefined) delete process.env.GROQ_MODEL;
+        else process.env.GROQ_MODEL = oldPrimary;
+        process.env.GROQ_FALLBACK_MODEL = "";
+    });
+    let now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    const requests = [];
+    mockCreate(async body => {
+        requests.push(body.model);
+        if (requests.length === 1) throw Object.assign(new Error("bad key"), { status: 401 });
+        const headers = body.model === primary ? { "retry-after": "900" } : {};
+        throw Object.assign(new Error("limited"), { status: 429, headers });
+    });
+
+    await assert.rejects(() => client.generateAIResponseStream({ message: "hi" }), { code: "GROQ_AUTH_ERROR" });
+    assert.deepEqual(requests, [primary]);
+    await assert.rejects(
+        () => client.generateAIResponseStream({ message: "hi" }),
+        { code: "GROQ_RATE_LIMIT", retryAfterSeconds: 60 }
+    );
+    assert.deepEqual(requests, [primary, primary, fallback]);
+
+    now += 12_000;
+    await assert.rejects(
+        () => client.generateAIResponseStream({ message: "hi" }),
+        { code: "GROQ_RATE_LIMIT", retryAfterSeconds: 48 }
+    );
+    assert.equal(requests.length, 3, "no API calls while both models are limited");
+});
+
+test("groq: a rate limit after streaming content does not restart that reply on another model", async t => {
+    process.env.GROQ_FALLBACK_MODEL = "test/unused-backup";
+    t.after(() => { process.env.GROQ_FALLBACK_MODEL = ""; });
+    let requests = 0;
+    mockCreate(async () => {
+        requests += 1;
+        return (async function* () {
+            yield { choices: [{ delta: { content: "Partial reply" } }] };
+            throw Object.assign(new Error("limited midstream"), { status: 429 });
+        })();
+    });
+    const seen = [];
+    await assert.rejects(
+        () => client.generateAIResponseStream({ message: "hi", onText: text => seen.push(text) }),
+        { code: "GROQ_RATE_LIMIT" }
+    );
+    assert.equal(requests, 1);
+    assert.deepEqual(seen, ["Partial reply"]);
+});
+
 test("groq: timeout and cancellation", async () => {
     const hang = (body, { signal }) => new Promise((resolve, reject) => {
         signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
@@ -694,9 +795,9 @@ let messageCounter = 0;
 function makeMessage({ guildId = G1, userId = U1, channelId = CH, content = "hello", bot = false, replyFails = false } = {}) {
     messageCounter += 1;
     const sent = [];
+    const replies = [];
     const reply = {
-        editable: true, deletable: true, content: "💭 Thinking...", edits: [], deleted: false,
-        async edit(options) { this.edits.push(options.content); this.content = options.content; return this; },
+        deletable: true, content: null, deleted: false,
         async delete() { this.deleted = true; },
     };
     return {
@@ -713,8 +814,14 @@ function makeMessage({ guildId = G1, userId = U1, channelId = CH, content = "hel
             permissionsFor: () => ({ has: () => true }),
             send: async (options) => { sent.push(options.content); return { id: "sent" }; },
         },
-        reply: async () => { if (replyFails) throw new Error("Unknown message"); return reply; },
+        reply: async (options) => {
+            if (replyFails) throw new Error("Unknown message");
+            replies.push(options.content);
+            reply.content = options.content;
+            return reply;
+        },
         sent,
+        replies,
         replyObj: reply,
     };
 }
@@ -747,6 +854,51 @@ test("handler: replies in the AI channel, saves history, cleans up all state", a
     assert.match(systemPrompt, /Hinglish/);
     assert.match(systemPrompt, new RegExp(MOODS.savage.prompt.slice(0, 30)));
     assert.match(systemPrompt, /greeting/i);
+});
+
+test("handler: affection and direct jabs sound short and distinct across moods", async () => {
+    await setupGuild("romantic");
+    const requests = [];
+    mockCreate(async body => {
+        requests.push(body);
+        const last = body.messages.at(-1).content;
+        return last === "I love you babe"
+            ? streamOf(["Aapki baat kaafi sweet lag rahi hai! Lekin main ek AI hoon. Main yahaan madad karne ke liye hoon."])
+            : streamOf(["Bauaa ka naam aapne liya, isliye main unka support karna zaroori samajhti hoon. Feel free to ask."]);
+    });
+
+    const romantic = makeMessage({ content: "I love you babe" });
+    await messageCreate.execute(romantic);
+    await waitIdle();
+    assert.deepEqual(romantic.replies, ["Aww, itne cute kab se ho?"]);
+    assert.match(requests[0].messages[0].content, /STYLE FOR THIS MESSAGE: Give one warm, playful reaction/);
+    assert.match(requests[0].messages[0].content, /SERVER MOOD: Romantic/);
+
+    await configManager.setAIMood(G1, "very_toxic");
+    const jab = makeMessage({ content: "Bauaa chutiya hain" });
+    await messageCreate.execute(jab);
+    await waitIdle();
+    assert.deepEqual(jab.replies, ["Bauaa pe bakchodi se point prove nahi hota."]);
+    assert.match(requests[1].messages[0].content, /STYLE FOR THIS MESSAGE: Give one short, direct reaction/);
+    assert.match(requests[1].messages[0].content, /SERVER MOOD: Very Toxic/);
+    assert.equal(requests[1].max_completion_tokens, 350);
+
+    const dismissed = makeMessage({ content: "Fuck off" });
+    await messageCreate.execute(dismissed);
+    await waitIdle();
+    assert.deepEqual(dismissed.replies, ["Theek hai."]);
+    assert.equal(requests.length, 2, "a dismissal needs no Groq request");
+});
+
+test("handler: keeps a complete short reaction and skips the rest of a long social reply", async () => {
+    await setupGuild("romantic");
+    mockCreate(async () => streamOf(["I'm an AI. Aww, tum bhi sweet ho. I'm here to help whenever you need me."]));
+
+    const message = makeMessage({ content: "I love you babe" });
+    await messageCreate.execute(message);
+    await waitIdle();
+    assert.deepEqual(message.replies, ["Aww, tum bhi sweet ho."]);
+    assert.equal(conversations.getConversation(G1, U1).at(-1).parts[0].text, "Aww, tum bhi sweet ho.");
 });
 
 test("handler: all ten server moods reach Groq with their own voice and temperature", async () => {
@@ -820,7 +972,7 @@ test("handler: redacts private input, buffers streamed replies, and saves only s
         request = body.messages.at(-1).content;
         return (async function* () {
             yield { choices: [{ delta: { content: "I won't repeat tester@example" } }] };
-            assert.equal(message.replyObj.edits.length, 0);
+            assert.equal(message.replies.length, 0);
             yield { choices: [{ delta: { content: ".test or gsk_exampleNotARealKey." }, finish_reason: "stop" }] };
         })();
     });
@@ -829,7 +981,7 @@ test("handler: redacts private input, buffers streamed replies, and saves only s
 
     assert.doesNotMatch(request, /tester@example\.test|example-pass/);
     assert.equal(message.replyObj.content, "I won't repeat [private] or [private].");
-    assert.deepEqual(message.replyObj.edits, [message.replyObj.content]);
+    assert.deepEqual(message.replies, [message.replyObj.content]);
     const history = JSON.stringify(conversations.getConversation(G1, U1));
     assert.doesNotMatch(history, /tester@example|example-pass|gsk_exampleNotARealKey/);
 });
@@ -892,7 +1044,7 @@ test("handler: MongoDB failure in a normal channel is silent (no spam)", async (
     const message = makeMessage();
     await messageCreate.execute(message);
     assert.equal(message.sent.length, 0);
-    assert.equal(message.replyObj.edits.length, 0);
+    assert.equal(message.replies.length, 0);
     assert.equal(messageCreate.__internals.activeRequests.size, 0);
 });
 
@@ -907,7 +1059,7 @@ test("handler: duplicate event delivery produces a single response", async () =>
     assert.equal(calls, 1);
 });
 
-test("handler: a newer message from the same user cancels the older request and leaves no stale 'Thinking'", async () => {
+test("handler: a newer message from the same user cancels the older reply before posting", async () => {
     await setupGuild();
     let call = 0;
     mockCreate(async (body, { signal }) => {
@@ -927,7 +1079,8 @@ test("handler: a newer message from the same user cancels the older request and 
     await messageCreate.execute(second);
     await waitIdle();
 
-    assert.equal(first.replyObj.deleted, true);
+    assert.deepEqual(first.replies, []);
+    assert.deepEqual(first.sent, []);
     assert.equal(second.replyObj.content, "second answer");
     assert.equal(limiter.getActiveSlots(), 0);
 });
@@ -969,7 +1122,7 @@ test("handler: long answers are split below Discord's limit with the first part 
     await setupGuild();
     const long = "word ".repeat(1200);
     mockCreate(async () => streamOf([long]));
-    const message = makeMessage();
+    const message = makeMessage({ content: "Explain in detail how the bot remembers a conversation." });
     await messageCreate.execute(message);
     await waitIdle();
     assert.ok(message.replyObj.content.length <= 1900);
@@ -977,10 +1130,10 @@ test("handler: long answers are split below Discord's limit with the first part 
     assert.ok(message.sent.every(chunk => chunk.length <= 1900));
 });
 
-test("handler: length-cut answers get a notice; failed Thinking reply falls back to channel.send", async () => {
+test("handler: length-cut answers get a notice; a failed reply falls back to channel.send", async () => {
     await setupGuild();
     mockCreate(async () => streamOf(["cut text"], "length"));
-    const cut = makeMessage();
+    const cut = makeMessage({ content: "Explain in detail how the bot remembers a conversation." });
     await messageCreate.execute(cut);
     await waitIdle();
     assert.match(cut.replyObj.content, /Reply ka baaki hissa reh gaya/);
@@ -989,6 +1142,8 @@ test("handler: length-cut answers get a notice; failed Thinking reply falls back
     const fallback = makeMessage({ userId: U2, replyFails: true });
     await messageCreate.execute(fallback);
     await waitIdle();
+    assert.deepEqual(fallback.sent, ["fine"]);
+    assert.deepEqual(fallback.replies, []);
     assert.equal(messageCreate.__internals.activeRequests.size, 0);
 });
 
@@ -1050,4 +1205,28 @@ test("runtime settings: configurable and never unlimited", () => {
     process.env.AI_USER_RATE_LIMIT = "999999";
     assert.equal(getRuntimeSettings().userRateLimit, 100, "clamped");
     delete process.env.AI_USER_RATE_LIMIT;
+});
+
+test("runtime settings: default backup and daily cap can be overridden", t => {
+    const previousLimit = process.env.AI_GUILD_DAILY_LIMIT;
+    const previousModel = process.env.GROQ_MODEL;
+    delete process.env.AI_GUILD_DAILY_LIMIT;
+    delete process.env.GROQ_MODEL;
+    delete process.env.GROQ_FALLBACK_MODEL;
+    t.after(() => {
+        process.env.GROQ_FALLBACK_MODEL = "";
+        if (previousLimit !== undefined) process.env.AI_GUILD_DAILY_LIMIT = previousLimit;
+        else delete process.env.AI_GUILD_DAILY_LIMIT;
+        if (previousModel !== undefined) process.env.GROQ_MODEL = previousModel;
+    });
+    assert.equal(getRuntimeSettings().fallbackModel, "openai/gpt-oss-120b");
+    assert.equal(getRuntimeSettings().guildDailyLimit, 2000);
+
+    process.env.GROQ_FALLBACK_MODEL = "openai/gpt-oss-20b";
+    assert.equal(getRuntimeSettings().fallbackModel, null);
+    assert.equal(getRuntimeSettings().guildDailyLimit, 1000);
+
+    process.env.GROQ_FALLBACK_MODEL = "openai/gpt-oss-120b";
+    process.env.AI_GUILD_DAILY_LIMIT = "500";
+    assert.equal(getRuntimeSettings().guildDailyLimit, 500);
 });

@@ -5,22 +5,18 @@ const DEFAULT_LANGUAGE = "hinglish";
 const LANGUAGES = {
     hinglish: {
         directive: "Reply in natural Roman Hinglish. Write Hindi in Latin letters and blend in English naturally.",
-        thinking: "💭 Soch rahi hoon…",
         continuation: '*(Reply ka baaki hissa reh gaya. Aage ke liye "continue, Hinglish please" likho.)*',
     },
     hindi: {
         directive: "Reply in natural Hindi using Devanagari script. Use feminine Hindi grammar for yourself.",
-        thinking: "💭 सोच रही हूँ…",
         continuation: '*(जवाब अधूरा रह गया। आगे के लिए "जारी रखो, हिंदी में जवाब दो" लिखें।)*',
     },
     gujarati: {
         directive: "Reply in natural Gujarati using Gujarati script. Use Gujarati vocabulary and grammar.",
-        thinking: "💭 વિચારી રહી છું…",
         continuation: '*(જવાબ અધૂરો રહી ગયો. આગળ માટે "ચાલુ રાખો, ગુજરાતીમાં જવાબ આપો" લખો.)*',
     },
     english: {
         directive: "Reply in clear, natural English.",
-        thinking: "💭 Thinking…",
         continuation: '*(Response was cut off. Say "continue, reply in English" for the rest.)*',
     },
 };

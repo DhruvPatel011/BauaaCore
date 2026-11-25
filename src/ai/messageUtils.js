@@ -2,6 +2,66 @@
 
 const DISCORD_SAFE_LENGTH = 1900;
 
+const SHORT_CHAT_TYPES = new Set(["greeting", "affection", "provocation", "dismissal"]);
+const ASSISTANT_SCRIPT =
+    /\b(?:as an ai|i(?:'m| am) here to (?:help|assist)|i(?:'m| am) (?:just )?an ai|feel free to ask|how can i (?:help|assist)|main (?:ek )?ai|madad ke liye|madad karne ke liye|aapki baat kaafi sweet lag rahi hai|bauaa ka naam (?:aapne|tumne)|mujhe lagta hai (?:aap|tum).*?upset)\b|मैं (?:एक )?(?:एआई|ai) हूँ|मदद के लिए|હું (?:એક )?(?:એઆઈ|ai) છું|મદદ માટે/iu;
+const SHORT_CHAT_FALLBACKS = {
+    hinglish: {
+        greeting: "Hey, kya haal?",
+        affection: "Aww, ye sweet tha.",
+        romantic: "Aww, itne cute kab se ho?",
+        provocation: "Point hai toh seedha bol.",
+        owner: "Bauaa pe gaali dene se point strong nahi hota.",
+        toxicOwner: "Bauaa pe bakchodi se point prove nahi hota.",
+        dismissal: "Theek hai.",
+    },
+    english: {
+        greeting: "Hey!",
+        affection: "Aw, that was sweet.",
+        romantic: "Aw, look at you being all cute.",
+        provocation: "Got a point? Make it.",
+        owner: "Insulting Bauaa doesn't make your point.",
+        toxicOwner: "Talking shit about Bauaa doesn't prove a thing.",
+        dismissal: "Alright.",
+    },
+    hindi: {
+        greeting: "अरे, कैसे हो?",
+        affection: "ये सुनकर अच्छा लगा।",
+        romantic: "अरे, आज इतने प्यारे कैसे लग रहे हो?",
+        provocation: "कोई बात है तो सीधे बोलो।",
+        owner: "बाउआ को गाली देने से तुम्हारी बात सही नहीं हो जाती।",
+        toxicOwner: "बाउआ पर बकवास करने से कुछ साबित नहीं होता।",
+        dismissal: "ठीक है।",
+    },
+    gujarati: {
+        greeting: "અરે, કેમ છો?",
+        affection: "આ સાંભળીને મજા આવી.",
+        romantic: "અરે, આજે આટલા મીઠા કેમ?",
+        provocation: "કંઈ કહેવું હોય તો સીધું કહો.",
+        owner: "બાઉઆને ગાળો આપવાથી તમારી વાત સાચી નથી થઈ જતી.",
+        toxicOwner: "બાઉઆ વિશે બકવાસ કરવાથી કંઈ સાબિત નથી થતું.",
+        dismissal: "ઠીક છે.",
+    },
+};
+
+function formatShortChatReply(response, { type, language, mood, bauaaMentioned }) {
+    const replies = SHORT_CHAT_FALLBACKS[language] || SHORT_CHAT_FALLBACKS.hinglish;
+    if (type === "dismissal") return replies.dismissal;
+
+    // Keep a complete conversational line and drop support-script filler.
+    const line = String(response ?? "").split(/(?<=[.!?।])\s+|\r?\n+/u)
+        .map(sentence => sentence.trim().replace(/’/g, "'"))
+        .find(sentence => sentence && sentence.length <= 140 &&
+            sentence.split(/\s+/u).length <= 18 && !ASSISTANT_SCRIPT.test(sentence));
+    if (line) return line;
+
+    if (type === "affection" && mood === "romantic") return replies.romantic;
+    if (type === "provocation" && bauaaMentioned) {
+        return mood === "very_toxic" ? replies.toxicOwner : replies.owner;
+    }
+    return replies[type];
+}
+
 /**
  * Split a long response into Discord-safe chunks.
  * - Prefers newline, then space boundaries.
@@ -80,6 +140,8 @@ function estimateTokens(text) {
 
 module.exports = {
     DISCORD_SAFE_LENGTH,
+    SHORT_CHAT_TYPES,
+    formatShortChatReply,
     splitMessage,
     tokenize,
     estimateTokens,

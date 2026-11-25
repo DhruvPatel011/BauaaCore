@@ -68,7 +68,7 @@ const MOODS = {
         label: "Very Toxic",
         temperature: 0.8,
         prompt:
-            "Sound blunt, fearless, and unimpressed. Use clipped sentences and a hard, deadpan comeback " +
+            "Sound blunt, fearless, and unimpressed. Use one clipped, deadpan comeback " +
             "when someone swears at you or Bauaa, or invites a roast. Match their level of profanity in " +
             "the selected language and aim the comeback at the behavior or remark. Keep ordinary answers direct and useful. " +
             "Avoid cruelty, harassment, discriminatory abuse, and threats.",
@@ -77,9 +77,9 @@ const MOODS = {
         label: "Romantic",
         temperature: 0.7,
         prompt:
-            "Use a soft, affectionate voice and gentle playful affection when welcome. Keep compliments " +
-            "specific and tasteful. Return to a friendly tone at any sign of discomfort. Respect boundaries " +
-            "and avoid implying a real relationship or exclusivity.",
+            "Use a warm, lightly flirty Discord voice when affection is welcome. React with a smile, a tiny tease, " +
+            "or one sincere compliment. Treat 'I love you babe' as a playful cue for a quick reaction. " +
+            "Keep it tasteful and respect signs of discomfort. Avoid implying a real relationship or exclusivity.",
     },
 };
 
@@ -109,9 +109,13 @@ function readBool(name, fallback) {
  */
 function getRuntimeSettings() {
     const effort = String(process.env.GROQ_REASONING_EFFORT || "low").trim().toLowerCase();
+    const model = process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-20b";
+    const backup = process.env.GROQ_FALLBACK_MODEL?.trim() ?? "openai/gpt-oss-120b";
+    const fallbackModel = backup && backup !== model ? backup : null;
 
     return {
-        model: String(process.env.GROQ_MODEL || "").trim() || "openai/gpt-oss-20b",
+        model,
+        fallbackModel,
         reasoningEffort: ["low", "medium", "high"].includes(effort) ? effort : null,
         requestTimeoutMs: readInt("AI_REQUEST_TIMEOUT_MS", 90000, 1000, 300000),
         maxRetries: readInt("AI_MAX_RETRIES", 1, 0, 2),
@@ -119,7 +123,7 @@ function getRuntimeSettings() {
         maxHistoryTokens: readInt("AI_MAX_HISTORY_TOKENS", 3000, 300, 30000),
         userRateLimit: readInt("AI_USER_RATE_LIMIT", 6, 1, 100),
         userRateWindowSeconds: readInt("AI_USER_RATE_WINDOW_SECONDS", 60, 1, 3600),
-        guildDailyLimit: readInt("AI_GUILD_DAILY_LIMIT", 1000, 1, 1000000),
+        guildDailyLimit: readInt("AI_GUILD_DAILY_LIMIT", fallbackModel ? 2000 : 1000, 1, 1000000),
         maxConcurrent: readInt("AI_MAX_CONCURRENT", 4, 1, 50),
         longTermMemory: readBool("AI_LONG_TERM_MEMORY", true),
         maxMemoriesPerUser: readInt("AI_MAX_MEMORIES_PER_USER", 30, 1, 200),

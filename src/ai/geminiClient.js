@@ -9,6 +9,8 @@ const { resolveLanguage } = require("./languageDetector");
 const { createAIError, describeError } = require("./aiErrors");
 
 let groqClient = null;
+const modelCooldowns = new Map();
+const DEFAULT_COOLDOWN_SECONDS = 60;
 
 function getGroqClient() {
     const apiKey = process.env.GROQ_API_KEY;
@@ -103,7 +105,8 @@ function classifyError(error, { timedOut }) {
     const status = Number(error?.status || 0);
     const message = String(error?.message || "");
     const retryAfterHeader = error?.headers?.["retry-after"] ?? error?.headers?.get?.("retry-after");
-    const retryAfterSeconds = Number(retryAfterHeader) || 0;
+    const retryAfter = Number(retryAfterHeader);
+    const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 0;
 
     if (status === 429) {
         return {
@@ -175,7 +178,6 @@ async function generateAIResponseStream({
 
     const settings = getRuntimeSettings();
     const client = getGroqClient();
-    const model = settings.model;
 
     const messages = [
         {
@@ -187,7 +189,6 @@ async function generateAIResponseStream({
     ];
 
     const body = {
-        model,
         messages,
         temperature: typeof temperature === "number" ? temperature : 0.4,
         max_completion_tokens: Math.min(
@@ -197,15 +198,49 @@ async function generateAIResponseStream({
         stream: true,
     };
 
-    // gpt-oss models spend tokens "thinking"; keep that small so answers are not cut off.
+    const runModel = model => streamOnModel(client, { ...body, model }, { settings, signal, onText, meta });
+    if (!settings.fallbackModel) return runModel(settings.model);
+
+    let earliestRetryAt = Infinity;
+    for (const model of [settings.model, settings.fallbackModel]) {
+        const blockedUntil = modelCooldowns.get(model);
+        if (blockedUntil > Date.now()) {
+            earliestRetryAt = Math.min(earliestRetryAt, blockedUntil);
+            continue;
+        }
+        modelCooldowns.delete(model);
+
+        try {
+            return await runModel(model);
+        } catch (error) {
+            if (error.code !== "GROQ_RATE_LIMIT") throw error;
+            const retryAt = Date.now() + (error.retryAfterSeconds || DEFAULT_COOLDOWN_SECONDS) * 1000;
+            const until = Math.max(modelCooldowns.get(model) || 0, retryAt);
+            modelCooldowns.set(model, until);
+            if (error.responseStarted) throw error;
+
+            earliestRetryAt = Math.min(earliestRetryAt, until);
+        }
+    }
+
+    throw createAIError("GROQ_RATE_LIMIT", "All configured Groq models are rate limited.", {
+        status: 429,
+        retryAfterSeconds: Math.max(0, Math.ceil((earliestRetryAt - Date.now()) / 1000)),
+    });
+}
+
+async function streamOnModel(client, body, { settings, signal, onText, meta }) {
+    const { model } = body;
+    // GPT-OSS models spend part of the completion budget on reasoning.
     if (settings.reasoningEffort && /gpt-oss/i.test(model)) {
         body.reasoning_effort = settings.reasoningEffort;
         body.include_reasoning = false;
     }
-
     const maxAttempts = 1 + settings.maxRetries;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (signal?.aborted) throw makeAbortError();
+
         const controller = new AbortController();
         const onExternalAbort = () => controller.abort();
         let timedOut = false;
@@ -269,6 +304,7 @@ async function generateAIResponseStream({
             if (error?.code === "GROQ_EMPTY_RESPONSE") throw error;
 
             const { error: typed, retryable } = classifyError(error, { timedOut });
+            if (typed.code === "GROQ_RATE_LIMIT") typed.responseStarted = emitted;
 
             console.error("Groq API Error:", describeError(typed));
 

@@ -22,11 +22,17 @@ const FOLLOWUP_PATTERN =
     /\b(?:isko|usko|iska|uska|wahi|wohi|pichle|previous|earlier|above|same|continue|aage|expand|improve|update|modify|rewrite|simplify|shorten|shorter|longer|short karo|chhota|bada karo|second|third|point \d)\b|जारी रखो|ચાલુ રાખો/i;
 const GREETING_PATTERN =
     /^(?:hi+|hello+|hey+|hii+|yo+|sup|namaste|namaskar|kem cho|gm|gn|good (?:morning|evening|night|afternoon)|how are you|what'?s up|wassup|kya haal|kaise ho|bhai kya haal)\b/i;
+const AFFECTION_PATTERN =
+    /^(?:i (?:love|miss|like) (?:you|u)\b|love (?:you|u)\b|miss (?:you|u)\b|you(?:'re| are) (?:so )?(?:cute|sweet)\b|tum(?:se)? (?:bahut |bohot )?(?:pyar|pyaar|cute|sweet)\b|मुझे तुमसे प्यार है|હું તને પ્રેમ કરું છું)/iu;
+const DISMISSAL_PATTERN =
+    /^(?:fuck off|stfu|shut up|go away|leave me alone|stop (?:talking|replying)|chup (?:ho |kar )?jao?|चुप हो जाओ|ચુપ થઈ જા)[.!।\s]*$/iu;
+const DIRECT_INSULT_PATTERN =
+    /^(?:fuck (?:you|u)\b|(?:bauaa|zoya|you(?:'re)?|tu|tum)\s+(?:(?:is|are|a|an|ek|bilkul)\s+)*(?:chutiy[ae]|idiot|stupid|useless|dumb|trash|bekaa?r)\b)/iu;
 const BANTER_PATTERN =
     /\b(?:roast|lol|lmao|haha+|joke|mazak|noob|stupid|dumb|useless|idiot|trash|bekar|pagal|gadha)\b|😂|🤣/i;
 
 function classifyMessage(text, { hasHistory = false } = {}) {
-    const value = String(text ?? "").trim();
+    const value = String(text ?? "").trim().replace(/’/g, "'");
     const words = value.split(/\s+/).filter(Boolean).length;
 
     if (CODE_PATTERN.test(value)) {
@@ -35,6 +41,11 @@ function classifyMessage(text, { hasHistory = false } = {}) {
 
     if (TUTORIAL_PATTERN.test(value)) return { type: "tutorial" };
     if (EMOTIONAL_PATTERN.test(value)) return { type: "emotional" };
+    if (DISMISSAL_PATTERN.test(value)) return { type: "dismissal" };
+    if (words <= 12 && !value.includes("?")) {
+        if (AFFECTION_PATTERN.test(value)) return { type: "affection" };
+        if (DIRECT_INSULT_PATTERN.test(value)) return { type: "provocation" };
+    }
     if (hasHistory && value.length <= 120 && FOLLOWUP_PATTERN.test(value)) return { type: "followup" };
     if (words <= 6 && GREETING_PATTERN.test(value)) return { type: "greeting" };
     if (BANTER_PATTERN.test(value)) return { type: "banter" };
@@ -44,9 +55,11 @@ function classifyMessage(text, { hasHistory = false } = {}) {
 }
 
 const OUTPUT_TOKENS_BY_TYPE = {
-    greeting: 500,
+    greeting: 350,
+    affection: 350,
+    provocation: 350,
     short_question: 800,
-    banter: 700,
+    banter: 550,
     emotional: 1000,
     general: 1200,
     followup: 1600,
