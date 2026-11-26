@@ -10,6 +10,7 @@ const password = process.env.LAVALINK_PASSWORD || randomBytes(32).toString("hex"
 const botEnv = {
     ...process.env,
     BAUAA_INSTANCE_ROLE: "all",
+    BAUAA_EMBEDDED_LAVALINK: "1",
     LAVALINK_URL: `http://${host}:${audioPort}`,
     LAVALINK_PASSWORD: password,
     MUSIC_MEDIA_BASE_URL: `http://${host}:${botPort}`,

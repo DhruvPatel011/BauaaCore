@@ -379,7 +379,7 @@ In the existing Render web service, open **Settings → Build → Source → Edi
 
 The image starts BauaaCore on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It configures the bot for both command groups and includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
-Check for `BauaaCore instance role: all` and `[Music] Lavalink primary connected` in the Render logs. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
+Check for `BauaaCore instance role: all` and `[Music] Lavalink primary connected` in the Render logs. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
 
 #### Run BauaaCore with a separate audio node
 

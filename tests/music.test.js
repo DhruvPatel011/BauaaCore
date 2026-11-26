@@ -267,15 +267,15 @@ test("music controls update one public panel without routine replies and preserv
     client.channels = { cache: guild.channels.cache, fetch: async id => id === textId ? text : null };
     const settings = { ...defaultSettings, djRole: "666666666666666666", djCommands: ["skip"] };
     const music = installMusic(client, { data: { settings: async () => settings }, env: {
+        BAUAA_EMBEDDED_LAVALINK: "1",
         LAVALINK_URL: `http://127.0.0.1:${server.address().port}`, LAVALINK_PASSWORD: "test-password",
         MUSIC_YTDLP_PATH: "./missing-test-yt-dlp",
     } });
     t.after(async () => { await music.close(); });
+    assert.equal(music.audioStatus(), "starting");
+    assert.throws(() => music.nodeFor(guildId), /starting up/);
     await music.start();
-    await waitFor(() => {
-        const node = music.manager.nodeManager.nodes.get("primary");
-        return node?.sessionId && node.info;
-    });
+    await waitFor(() => music.audioStatus() === "connected");
     function interaction(values) {
         return { guild, guildId, channelId: textId, inGuild: () => true, user: member.user, member,
             memberPermissions: new PermissionsBitField(), options: {

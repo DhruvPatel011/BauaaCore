@@ -338,7 +338,10 @@ registerEvent(
 // 🌐 HTTP HEALTH SERVER
 // ========================================
 
-const health = createHealthHandler(client, instanceRole);
+const health = createHealthHandler(client, instanceRole, {
+    audioStatus: music.audioStatus,
+    waitForInitialAudio: process.env.BAUAA_EMBEDDED_LAVALINK === "1",
+});
 const server = http.createServer((req, res) => {
     if (!music.handleHttp(req, res)) health(req, res);
 });

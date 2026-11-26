@@ -20,8 +20,9 @@ async function pingDatabase() {
     }
 }
 
-function createHealthHandler(client, instanceRole) {
+function createHealthHandler(client, instanceRole, { audioStatus, waitForInitialAudio = false } = {}) {
     let check;
+    let audioWasReady = !waitForInitialAudio;
     return async (req, res) => {
         let path;
         try {
@@ -32,11 +33,14 @@ function createHealthHandler(client, instanceRole) {
         }
 
         if (path === "/" || path === "/health") {
+            const audio = audioStatus?.();
+            if (audio === "connected") audioWasReady = true;
             return sendJson(res, 200, {
                 service: "BauaaCore",
                 status: "running",
                 instanceRole,
                 discord: client.isReady() ? "connected" : "disconnected",
+                audio,
                 uptime: Math.floor(process.uptime()),
                 timestamp: new Date().toISOString(),
             });
@@ -52,13 +56,16 @@ function createHealthHandler(client, instanceRole) {
                 database = await check.result;
                 discordConnected = client.isReady();
             }
-            const ready = discordConnected && database === "connected";
+            const audio = audioStatus?.();
+            if (audio === "connected") audioWasReady = true;
+            const ready = discordConnected && database === "connected" && audioWasReady;
             return sendJson(res, ready ? 200 : 503, {
                 service: "BauaaCore",
                 status: ready ? "ready" : "not_ready",
                 instanceRole,
                 discord: discordConnected ? "connected" : "disconnected",
                 database,
+                audio,
                 timestamp: new Date().toISOString(),
             });
         }

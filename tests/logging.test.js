@@ -360,6 +360,21 @@ test("readiness requires Discord and MongoDB, while liveness reports the HTTP pr
     assert.equal(second.body.database, "connected");
     assert.equal(pingCount, 1);
 
+    let audio = "starting";
+    const embedded = createHealthHandler(client, "all", { audioStatus: () => audio, waitForInitialAudio: true });
+    assert.equal((await call("/health", embedded)).code, 200);
+    const starting = await call("/ready", embedded);
+    assert.equal(starting.code, 503);
+    assert.equal(starting.body.audio, "starting");
+    audio = "connected";
+    const connected = await call("/ready", embedded);
+    assert.equal(connected.code, 200);
+    assert.equal(connected.body.audio, "connected");
+    audio = "offline";
+    const restarting = await call("/ready", embedded);
+    assert.equal(restarting.code, 200);
+    assert.equal(restarting.body.audio, "offline");
+
     db.command = async () => { throw new Error("Database connection lost"); };
     const unavailable = await call("/ready", createHealthHandler(client));
     assert.equal(unavailable.code, 503);

@@ -49,6 +49,9 @@ function assertVoice(interaction, channel) {
 }
 
 function createMusic(client, { env = process.env, data = library(), enabled = true } = {}) {
+    const embedded = env.BAUAA_EMBEDDED_LAVALINK === "1";
+    const startupDeadline = Date.now() + 3 * 60_000;
+    let audioConnected = false;
     let nodes;
     try {
         nodes = enabled ? nodeOptions(env) : [];
@@ -102,12 +105,34 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         return manager?.getPlayer(guildId);
     }
 
+    function isReadyNode(node) {
+        return Boolean(node?.connected && node.sessionId && node.info);
+    }
+
+    function availableNode() {
+        return manager?.nodeManager.leastUsedNodes().find(isReadyNode);
+    }
+
+    function audioStatus() {
+        if (!enabled) return "disabled";
+        if (!manager) return "unconfigured";
+        if (availableNode()) {
+            audioConnected = true;
+            return "connected";
+        }
+        return embedded && !audioConnected && Date.now() < startupDeadline ? "starting" : "offline";
+    }
+
     function nodeFor(guildId) {
-        const node = playerFor(guildId)?.node || manager?.nodeManager.leastUsedNodes().find(item => item.sessionId && item.info);
-        if (!node?.connected || !node.sessionId || !node.info) {
+        const node = playerFor(guildId)?.node || availableNode();
+        if (!isReadyNode(node)) {
+            if (audioStatus() === "starting") {
+                throw new MusicError("The music server is starting up. Try again once `/debug` shows a connected audio node.");
+            }
             throw new MusicError(manager ? "The music server is offline. Try again in a moment." :
                 "Music needs a Lavalink server. Ask the bot operator to configure `LAVALINK_PASSWORD`.");
         }
+        audioConnected = true;
         return node;
     }
 
@@ -515,7 +540,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     }
 
     return {
-        manager, data, guard, nodeFor, playerFor, join, enqueue, lookup, unresolved, refresh, sync, scheduleIdle,
+        manager, data, guard, nodeFor, audioStatus, playerFor, join, enqueue, lookup, unresolved, refresh, sync, scheduleIdle,
         select, selected, consumeSelection: id => selections.delete(id), applyFilter, applySponsors, repair, storeTrack,
         serialize: (id, fn) => serial(controls, id, fn),
         voiceChannel: player => client.channels.cache.get(player.voiceChannelId),
