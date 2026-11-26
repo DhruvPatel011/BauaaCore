@@ -21,3 +21,46 @@ jobs:
           package-manager-cache: false
       - run: npm ci
       - run: npm test
+
+  render-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build --tag bauaacore:render-test .
+      - name: Check both processes in the same container
+        run: |
+          cat > "$RUNNER_TEMP/render-bot.js" <<'EOF'
+          const assert = require("node:assert/strict");
+          const http = require("node:http");
+
+          assert.equal(process.env.BAUAA_INSTANCE_ROLE, "all");
+          assert.equal(process.env.LAVALINK_URL, "http://127.0.0.1:2333");
+          assert.equal(process.env.MUSIC_MEDIA_BASE_URL, "http://127.0.0.1:11000");
+          const server = http.createServer(async (_req, res) => {
+              try {
+                  const result = await fetch(`${process.env.LAVALINK_URL}/v4/info`, {
+                      headers: { Authorization: process.env.LAVALINK_PASSWORD },
+                      signal: AbortSignal.timeout(2000),
+                  });
+                  assert.ok(result.ok);
+                  const info = await result.json();
+                  assert.equal(info.version.semver, "4.2.2");
+                  assert.ok(info.sourceManagers.includes("youtube"));
+                  assert.ok(info.sourceManagers.includes("soundcloud"));
+                  res.end("Ready");
+              } catch (error) {
+                  res.writeHead(503).end(error.message);
+              }
+          });
+          server.listen(Number(process.env.PORT), "0.0.0.0");
+          process.on("SIGTERM", () => server.close());
+          EOF
+
+          container=$(docker run --detach --publish 127.0.0.1:18080:11000 --env PORT=11000 \
+              --mount "type=bind,src=$RUNNER_TEMP/render-bot.js,dst=/app/src/index.js,readonly" bauaacore:render-test)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          curl --fail --silent --show-error --retry 40 --retry-delay 2 --retry-all-errors --max-time 4 http://127.0.0.1:18080/
+          docker stop --time 25 "$container"
+          test "$(docker inspect --format '{{.State.ExitCode}}' "$container")" -eq 0

@@ -1,0 +1,12 @@
+**
+!package.json
+!package-lock.json
+!src/
+!src/**
+!scripts/
+!scripts/install-yt-dlp.sh
+!scripts/start-render.js
+!music-node/
+!music-node/application.yml
+!music-node/install-plugins.sh
+!music-node/plugins.sha256
