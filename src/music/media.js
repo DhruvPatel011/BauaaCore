@@ -1,6 +1,7 @@
 const { execFile } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const { promisify } = require("node:util");
+const { ytDlpOptions } = require("./shared");
 
 const execute = promisify(execFile);
 const maxTrackBytes = 16 * 1024 * 1024;
@@ -26,9 +27,8 @@ function createMediaCache(address, exec = execute) {
         if (!origin || busy >= 2) return null;
         busy++;
         try {
-            const { stdout } = await exec(binary, ["--ignore-config", "--no-warnings", "--js-runtimes", "node", "--no-playlist",
-                "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input], {
-                timeout: 28000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true,
+            const { stdout } = await exec(binary, [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input], {
+                timeout: 45000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true,
             });
             if (!Buffer.isBuffer(stdout) || stdout.length < 1024) return null;
             for (const [id, entry] of audio) if (entry.expires <= Date.now()) remove(id);
@@ -37,18 +37,18 @@ function createMediaCache(address, exec = execute) {
             const webm = stdout.readUInt32BE(0) === 0x1a45dfa3;
             audio.set(id, { body: stdout, type: webm ? "audio/webm" : "audio/mp4", expires: Date.now() + 7200000 });
             bytes += stdout.length;
-            const result = await node.search({ query: `${origin}${mediaPrefix}${id}.${webm ? "webm" : "m4a"}` }, requester);
-            if (!result.tracks?.length) remove(id);
-            return result.tracks?.[0] || null;
-        } catch {
-            return null;
+            const result = await node.search({ query: `${origin}${mediaPrefix}${id}.${webm ? "webm" : "m4a"}` }, requester).catch(() => null);
+            if (!result?.tracks?.length) remove(id);
+            return result?.tracks?.[0] || null;
         } finally {
             busy--;
         }
     }
 
     function remove(id) {
-        bytes -= audio.get(id).body.length;
+        const entry = audio.get(id);
+        if (!entry) return;
+        bytes -= entry.body.length;
         audio.delete(id);
     }
 

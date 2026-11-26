@@ -86,14 +86,14 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
         console.warn(`[Music] ${event}`, error?.code || error?.name || "failed");
     }
 
-    async function providerTrack(node, url, requester) {
+    async function providerTrack(node, url, requester, info) {
         const provider = streamProvider(url);
         try {
-            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load);
+            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info);
             if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
-            const output = typeof error.stderr === "string" ? error.stderr : "";
+            const output = error.stderr?.toString() || "";
             const status = /\bHTTP Error (\d{3})\b/i.exec(output)?.[1];
             const detail = /sign in|login required/i.test(output) ? "upstream requested sign-in"
                 : error.killed ? "audio resolution timed out"
@@ -230,12 +230,12 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
             if (reference.kind === "match") {
                 result = await matchTrack(player.node, reference, requester, extractor ? candidate => {
                     if (!streamProvider(candidate.info.uri)) return candidate;
-                    return providerTrack(player.node, candidate.info.uri, requester);
+                    return providerTrack(player.node, candidate.info.uri, requester, candidate.info);
                 } : undefined);
             } else {
                 const uri = result?.info.uri || reference.url;
                 if (extractor && streamProvider(uri)) {
-                    const playable = await providerTrack(player.node, uri, requester);
+                    const playable = await providerTrack(player.node, uri, requester, result?.info);
                     if (playable) result = playable;
                     else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
                         player.node.info?.sourceManagers?.includes("soundcloud")) {

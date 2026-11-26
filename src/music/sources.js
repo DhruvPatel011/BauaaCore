@@ -1,7 +1,7 @@
 const { isIP } = require("node:net");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
-const { MusicError, TRACK_LIMIT } = require("./shared");
+const { MusicError, TRACK_LIMIT, ytDlpOptions } = require("./shared");
 
 const publicSources = [
     "youtube.com", "youtu.be", "soundcloud.com", "spotify.com", "spotify.link", "spoti.fi",
@@ -157,13 +157,32 @@ function streamProvider(input) {
     return null;
 }
 
-async function directProviderTrack(node, input, requester, binary, exec = execute, fallback) {
+function resolvedProviderTrack(track, input, provider, info) {
+    if (!track?.encoded || track.info?.sourceName !== "http") return null;
+    Object.assign(track.info, { uri: input, sourceName: provider, identifier: String(info.identifier || track.info.identifier),
+        title: info.title || track.info.title, author: info.author || track.info.author,
+        artworkUrl: info.artworkUrl || track.info.artworkUrl,
+        duration: Number.isFinite(info.duration) && info.duration > 0 ? info.duration : track.info.duration });
+    track.userData = { ...track.userData, musicExtracted: true };
+    return track;
+}
+
+async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo) {
     const provider = binary && streamProvider(input);
     if (!provider) return null;
-    const { stdout } = await exec(binary, ["--ignore-config", "--no-warnings", "--js-runtimes", "node", "--no-playlist",
-        "-q", "-f", "bestaudio[protocol=https]/best[protocol=https]", "--print",
+    const useKnownInfo = provider === "youtube" && knownInfo?.sourceName === "youtube" && knownInfo.uri === input && !knownInfo.isStream;
+    if (useKnownInfo && fallback) {
+        // The download can reuse the search result's metadata and avoid a second yt-dlp invocation.
+        const hosted = await fallback(node, input, requester, binary).catch(error => {
+            if (error.killed || error.code === "ENOENT") throw error;
+            return null;
+        });
+        const ready = resolvedProviderTrack(hosted, input, provider, knownInfo);
+        if (ready) return ready;
+    }
+    const { stdout } = await exec(binary, [...ytDlpOptions, "-q", "-f", "bestaudio[protocol=https]/best[protocol=https]", "--print",
         '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j}',
-        "--", input], { timeout: 20000, maxBuffer: 65536, windowsHide: true });
+        "--", input], { timeout: 40000, maxBuffer: 65536, windowsHide: true });
     const metadata = JSON.parse(stdout.trim());
     const resource = new URL(metadata.url);
     const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com"];
@@ -171,19 +190,15 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         !isSource(resource.hostname, mediaDomains)) return null;
     // The URL YouTube issues to the bot may be bound to its IP. If the bot can
     // serve the audio, let Lavalink load it from the bot before trying that URL.
-    let track = provider === "youtube" ? await fallback?.(node, input, requester, binary) : null;
+    let track = provider === "youtube" && !useKnownInfo && !knownInfo?.isStream
+        ? await fallback?.(node, input, requester, binary).catch(() => null) : null;
     if (!track) {
         const result = await node.search({ query: resource.href }, requester).catch(() => null);
         track = result?.tracks?.[0];
     }
-    if (!track && provider === "soundcloud") track = await fallback?.(node, input, requester, binary);
-    if (!track?.encoded || track.info.sourceName !== "http") return null;
-    const duration = Number(metadata.duration) * 1000;
-    Object.assign(track.info, { uri: input, sourceName: provider, identifier: String(metadata.id || track.info.identifier),
-        title: metadata.title || track.info.title, author: metadata.author || track.info.author,
-        artworkUrl: metadata.artwork || track.info.artworkUrl, duration: Number.isFinite(duration) && duration > 0 ? duration : track.info.duration });
-    track.userData = { ...track.userData, musicExtracted: true };
-    return track;
+    if (!track && provider === "soundcloud") track = await fallback?.(node, input, requester, binary).catch(() => null);
+    return resolvedProviderTrack(track, input, provider, { title: metadata.title, author: metadata.author,
+        identifier: metadata.id, artworkUrl: metadata.artwork, duration: Number(metadata.duration) * 1000 });
 }
 
 function storeTrack(track) {

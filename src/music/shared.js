@@ -4,6 +4,8 @@ class MusicError extends Error {}
 
 const TRACK_LIMIT = 500;
 const noMentions = { parse: [], repliedUser: false };
+const ytDlpOptions = ["--ignore-config", "--no-warnings", "--js-runtimes", "node", "--no-playlist",
+    "--socket-timeout", "10", "--retries", "1", "--extractor-retries", "1"];
 
 function musicText(value, limit = 100) {
     return escapeMarkdown(String(value || "Unknown").replace(/[\r\n\t]+/g, " ").slice(0, limit));
@@ -43,4 +45,4 @@ function trackLink(track) {
     }
 }
 
-module.exports = { MusicError, TRACK_LIMIT, noMentions, musicText, duration, trackTitle, trackLines, trackLink };
+module.exports = { MusicError, TRACK_LIMIT, noMentions, ytDlpOptions, musicText, duration, trackTitle, trackLines, trackLink };

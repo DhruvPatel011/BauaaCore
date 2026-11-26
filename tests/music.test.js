@@ -114,11 +114,18 @@ test("audio fallback serves private links and byte ranges for Lavalink seeking",
     assert.deepEqual(result, { encoded: "cached-audio" });
 });
 
-test("YouTube playback prefers audio served by the bot and still supports direct streams", async () => {
+test("YouTube playback reuses search metadata and still supports direct streams without a cache", async () => {
     const video = "https://www.youtube.com/watch?v=abcdefghijk";
     const media = "https://rr1.googlevideo.com/videoplayback?signature=short-lived";
     const requester = { id: userId };
-    const extract = async () => ({ stdout: JSON.stringify({ url: media, title: "A Video" }) });
+    const knownInfo = { uri: video, sourceName: "youtube", identifier: "abcdefghijk", title: "A Video", duration: 20000 };
+    let probes = 0;
+    const extract = async (_, args, options) => {
+        probes++;
+        assert.equal(options.timeout, 40000);
+        assert.equal(args[args.indexOf("--socket-timeout") + 1], "10");
+        return { stdout: JSON.stringify({ url: media, title: "A Video" }) };
+    };
     const httpTrack = encoded => ({ encoded, info: { sourceName: "http", title: "Unknown title" } });
     const requests = [];
     const node = { search: async ({ query }) => {
@@ -129,13 +136,21 @@ test("YouTube playback prefers audio served by the bot and still supports direct
         async (...args) => {
             assert.deepEqual(args, [node, video, requester, "yt-dlp"]);
             return httpTrack("hosted-audio");
-        });
+        }, knownInfo);
     assert.equal(hosted.encoded, "hosted-audio");
     assert.equal(hosted.info.uri, video);
+    assert.equal(hosted.info.title, knownInfo.title);
+    assert.equal(hosted.info.duration, knownInfo.duration);
+    assert.equal(probes, 0);
     assert.deepEqual(requests, []);
 
-    const direct = await directProviderTrack(node, video, requester, "yt-dlp", extract, async () => null);
+    const timeout = Object.assign(new Error("Audio download timed out"), { killed: true });
+    await assert.rejects(directProviderTrack(node, video, requester, "yt-dlp", extract, async () => { throw timeout; }, knownInfo), timeout);
+    assert.equal(probes, 0);
+
+    const direct = await directProviderTrack(node, video, requester, "yt-dlp", extract, async () => null, knownInfo);
     assert.equal(direct.encoded, "direct-audio");
+    assert.equal(probes, 1);
     assert.deepEqual(requests, [media]);
 });
 
