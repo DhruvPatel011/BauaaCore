@@ -16,7 +16,23 @@ function playerPanel(player, id, buttons = true) {
     const status = track?.info.isStream ? "Live" : `${duration(player.position)} / ${duration(track?.info.duration)}`;
     const embed = new EmbedBuilder().setColor(color).setTitle(track ? state : "Music player")
         .setDescription(track ? `**${trackTitle(track)}**\n${musicText(track.info.author)}\n${status}` : "The queue is empty. Use `/play` to add music.");
-    if (track?.info.artworkUrl?.startsWith("https://")) embed.setThumbnail(track.info.artworkUrl);
+    const info = track?.info;
+const reference = track?.userData?.musicReference;
+
+const artworkUrl = [
+    info?.artworkUrl,
+    info?.thumbnail,
+    info?.thumbnailUrl,
+    reference?.artworkUrl,
+    reference?.thumbnail,
+    info?.sourceName === "youtube" && /^[\w-]{11}$/.test(info.identifier)
+        ? `https://i.ytimg.com/vi/${info.identifier}/hqdefault.jpg`
+        : null,
+].find(url => typeof url === "string" && /^https?:\/\//i.test(url));
+
+if (artworkUrl) {
+    embed.setThumbnail(artworkUrl);
+}
     embed.setFooter({
         text: `${player.volume}% volume · ${player.queue.tracks.length} queued · Loop ${player.repeatMode} · Autoplay ${player.getData("autoplay") ? "on" : "off"}`,
     });
