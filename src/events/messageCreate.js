@@ -11,6 +11,9 @@ const { resolveLanguage } = require("../ai/languageDetector");
 const { generateAIResponseStream } = require("../ai/geminiClient");
 const { buildSystemPrompt } = require("../ai/prompt");
 const { buildContext } = require("../ai/contextManager");
+const {
+    getLiveSearchHistory, getIndiaMusicChartLimit, fetchIndiaMusicChart, formatLiveSearchReply,
+} = require("../ai/liveSearch");
 const { getCustomInstructions } = require("../ai/instructionManager");
 const memoryManager = require("../ai/memoryManager");
 const usage = require("../ai/usageLimiter");
@@ -225,8 +228,11 @@ async function processAIMessage({
 
         if (superseded()) return;
 
-        const roast = usesRoastReply(config.mood, context.conversationType, appNotes);
-        const shortChat = roast || SHORT_CHAT_TYPES.has(context.conversationType);
+        const searchHistory = appNotes.length || context.conversationType === "emotional" ||
+            context.conversationType === "dismissal" ? null : getLiveSearchHistory(safeUserMessage, history);
+        const liveSearch = searchHistory !== null;
+        const roast = !liveSearch && usesRoastReply(config.mood, context.conversationType, appNotes);
+        const shortChat = !liveSearch && (roast || SHORT_CHAT_TYPES.has(context.conversationType));
         const shortOptions = {
             type: context.conversationType, language: language.key, mood: config.mood, bauaaMentioned, roast,
         };
@@ -248,12 +254,13 @@ async function processAIMessage({
         if (superseded()) return;
 
         const systemPrompt = buildSystemPrompt(config.mood, {
-            customInstructions,
-            memories: context.memories,
+            customInstructions: liveSearch ? "" : customInstructions,
+            memories: liveSearch ? [] : context.memories,
             languageDirective: context.language.directive,
             conversationType: context.conversationType,
             appNotes,
             bauaaMentioned,
+            liveSearch,
         });
 
         // Typing indicator (errors ignored; refreshed while generating).
@@ -269,21 +276,45 @@ async function processAIMessage({
             `AI Processing | Mood: ${config.mood} | Type: ${context.conversationType}`
         );
 
+        const chartCount = searchHistory?.length === 0 ? getIndiaMusicChartLimit(safeUserMessage) : 0;
+        if (chartCount) {
+            const chart = await fetchIndiaMusicChart(chartCount, language.key, request.controller.signal);
+            if (superseded()) return;
+            if (chart) {
+                const answer = redactPrivateData(chart);
+                saveConversation(guildId, userId, safeUserMessage, answer);
+                await sendAIResponse(message, answer, requestKey, request);
+                return;
+            }
+        }
+
         const meta = {};
         const mood = MOODS[config.mood] || MOODS.default;
 
         // Wait for a complete response so secrets split across chunks cannot reach Discord.
         const response = await generateAIResponseStream({
-            history: context.history,
+            history: searchHistory ?? context.history,
             message: safeUserMessage,
             systemPrompt,
             signal: request.controller.signal,
-            maxTokens: context.maxOutputTokens,
-            temperature: mood.temperature,
+            maxTokens: liveSearch ? settings.maxOutputTokens : context.maxOutputTokens,
+            temperature: liveSearch ? 0.3 : mood.temperature,
+            liveSearch,
             meta,
         });
 
         if (superseded()) return;
+
+        if (liveSearch) {
+            const answer = formatLiveSearchReply(redactPrivateData(response), {
+                ...meta, language: language.key,
+                query: [...searchHistory.map(item => item.parts[0].text), safeUserMessage].join("\n"),
+            });
+            const screenedAnswer = redactPrivateData(answer);
+            saveConversation(guildId, userId, safeUserMessage, screenedAnswer);
+            await sendAIResponse(message, screenedAnswer, requestKey, request);
+            return;
+        }
 
         const screened = redactPrivateData(response);
         const chatReply = shortChat

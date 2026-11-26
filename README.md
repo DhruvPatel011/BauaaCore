@@ -283,6 +283,10 @@ Copy [`.env.example`](.env.example) to `.env` and set the variables for your ins
 
 When Groq returns HTTP `429` before a reply begins, Zoya tries the backup with the same API key and chat context. She skips models in cooldown for the time Groq specifies, or for 60 seconds if the response has no retry time. If both models are limited, Zoya shows a rate-limit message. Check the quotas for your organization in the [Groq console](https://console.groq.com/settings/limits).
 
+Zoya uses the server clock in `Asia/Kolkata` to interpret relative dates. Requests for current facts and explicit web lookups use [Groq Browser Search](https://console.groq.com/docs/tool-use/built-in-tools/browser-search) with the existing `GROQ_API_KEY`. If neither configured chat model supports browser search, those requests use `openai/gpt-oss-20b`. Zoya includes links returned by the search tool and reports when a lookup cannot be verified.
+
+For current top-song requests in India without a different platform specified, Zoya reads the [Apple Music India chart](https://music.apple.com/in/new/top-charts/songs) directly and displays the published ranks and the time it checked the page.
+
 ### 5. Start the Bot
 
 ```bash

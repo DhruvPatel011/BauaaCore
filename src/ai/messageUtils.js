@@ -5,9 +5,10 @@ const DISCORD_SAFE_LENGTH = 1900;
 const SHORT_CHAT_TYPES = new Set(["greeting", "affection", "provocation", "dismissal"]);
 const ASSISTANT_SCRIPT =
     /\b(?:as an ai|i(?:'m| am) here to (?:help|assist)|i(?:'m| am) (?:just )?an ai|feel free to ask|how can i (?:help|assist)|main (?:ek )?ai|madad ke liye|madad karne ke liye|aapki baat kaafi sweet lag rahi hai|bauaa ka naam (?:aapne|tumne)|mujhe lagta hai (?:aap|tum).*?upset)\b|मैं (?:एक )?(?:एआई|ai) हूँ|मदद के लिए|હું (?:એક )?(?:એઆઈ|ai) છું|મદદ માટે/iu;
-const ROAST_PROFANITY =
-    /(?<![\p{L}\p{M}])(?:bullshit|shit(?:ty)?|fuck(?:ing)?|damn|crap|bakchod(?:i)?|chutiyapa|gaand|बकचोद(?:ी)?|चूतियापा|चुतियापा|गांड|બકચોદ(?:ી)?|ચૂતીયાપો|ગાંડ)(?![\p{L}\p{M}])/iu;
-const ROAST_END = /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?$/u;
+const ROAST_EMOJI = /\p{Extended_Pictographic}/u;
+const ROAST_ACKNOWLEDGMENT =
+    /^(?:okay|ok|alright|sure|nice|(?:th[ei]+k|sahi) hai(?: bhai)?|samajh gayi|ठीक है|समझ गई|ઠીક છે|સારું)[.!।\s\uFE0F\p{Extended_Pictographic}]*$/iu;
+const roastFallbackPositions = new WeakMap();
 const SHORT_CHAT_FALLBACKS = {
     hinglish: {
         greeting: "Hey, kya haal?",
@@ -15,8 +16,15 @@ const SHORT_CHAT_FALLBACKS = {
         romantic: "Tumhari ye baat seedha dil pe lagi 🤍",
         provocation: "Point hai toh seedha bol.",
         owner: "Bauaa pe gaali dene se point strong nahi hota.",
-        roast: "Itni bakchodi aur punchline abhi bhi loading pe hai 💀",
-        toxicOwner: "Bauaa pe bakchodi ka punchline bhi loading pe atka hai 🤡",
+        roast: [
+            "Itni bakchodi aur punchline abhi bhi loading pe hai 💀",
+            "Confidence full volume pe, logic gaya bhaad mein 🤡",
+            "Badi zabardast bakchodi thi, bas kisi baat ka matlab hota toh maza aata 😭",
+        ],
+        toxicOwner: [
+            "Bauaa pe bakchodi ka punchline bhi loading pe atka hai 🤡",
+            "Bauaa pe shot liya aur teri bakchodi ne khud ka goal kar diya 💀",
+        ],
         dismissal: "Theek hai.",
     },
     english: {
@@ -25,8 +33,15 @@ const SHORT_CHAT_FALLBACKS = {
         romantic: "That went straight to my heart 🤍",
         provocation: "Got a point? Make it.",
         owner: "Insulting Bauaa doesn't make your point.",
-        roast: "That's a whole lot of bullshit for zero punchline 💀",
-        toxicOwner: "All that shit about Bauaa and the punchline still missed 🤡",
+        roast: [
+            "That's a whole lot of bullshit for zero punchline 💀",
+            "Confidence at full volume and the logic sounds like shit 🤡",
+            "The bullshit arrived right on time. The point missed its bus 😭",
+        ],
+        toxicOwner: [
+            "All that shit about Bauaa and the punchline still missed 🤡",
+            "That shot at Bauaa had the aim of a busted-ass sprinkler 💀",
+        ],
         dismissal: "Alright.",
     },
     hindi: {
@@ -35,8 +50,15 @@ const SHORT_CHAT_FALLBACKS = {
         romantic: "तुम्हारी ये बात सीधे दिल को छू गई 🤍",
         provocation: "कोई बात है तो सीधे बोलो।",
         owner: "बाउआ को गाली देने से तुम्हारी बात सही नहीं हो जाती।",
-        roast: "इतनी बकचोदी और मज़ाक अब भी लोड हो रहा है 💀",
-        toxicOwner: "बाउआ पर इतनी बकचोदी और तंज़ भी निशाने से बाहर 🤡",
+        roast: [
+            "इतनी बकचोदी और मज़ाक अब भी लोड हो रहा है 💀",
+            "आवाज़ पूरी, तर्क गया भाड़ में 🤡",
+            "बकचोदी वक्त पर आ गई, मुद्दे की बस छूट गई 😭",
+        ],
+        toxicOwner: [
+            "बाउआ पर इतनी बकचोदी और तंज़ भी निशाने से बाहर 🤡",
+            "बाउआ पर निशाना था, बकचोदी वापस तेरे पाले में आ गई 💀",
+        ],
         dismissal: "ठीक है।",
     },
     gujarati: {
@@ -45,8 +67,15 @@ const SHORT_CHAT_FALLBACKS = {
         romantic: "તારી આ વાત સીધી દિલને અડી ગઈ 🤍",
         provocation: "કંઈ કહેવું હોય તો સીધું કહો.",
         owner: "બાઉઆને ગાળો આપવાથી તમારી વાત સાચી નથી થઈ જતી.",
-        roast: "આટલી બકચોદી પછીય જોક હજી લોડ થાય છે 💀",
-        toxicOwner: "બાઉઆ પર આટલી બકચોદી ને ટોણોય નિશાન ચૂકી ગયો 🤡",
+        roast: [
+            "આટલી બકચોદી પછીય જોક હજી લોડ થાય છે 💀",
+            "અવાજ ફુલ ને તર્ક ગયો ભાડમાં 🤡",
+            "બકચોદી સમયસર આવી ગઈ, મુદ્દાની બસ છૂટી ગઈ 😭",
+        ],
+        toxicOwner: [
+            "બાઉઆ પર આટલી બકચોદી ને ટોણોય નિશાન ચૂકી ગયો 🤡",
+            "નિશાન બાઉઆ પર હતું, બકચોદી ફરી તારી પાસે જ આવી 💀",
+        ],
         dismissal: "ઠીક છે.",
     },
 };
@@ -63,10 +92,15 @@ function formatShortChatReply(response, { type, language, mood, bauaaMentioned, 
         .map(sentence => sentence.trim().replace(/’/g, "'"))
         .find(sentence => sentence && sentence.length <= 140 &&
             sentence.split(/\s+/u).length <= 18 && !ASSISTANT_SCRIPT.test(sentence) &&
-            (!roast || (!/[?？؟]/u.test(sentence) && ROAST_PROFANITY.test(sentence) && ROAST_END.test(sentence))));
-    if (line) return line;
+            (!roast || (/\p{L}/u.test(sentence) && !/[?？؟]/u.test(sentence) && !ROAST_ACKNOWLEDGMENT.test(sentence))));
+    if (line) return roast && !ROAST_EMOJI.test(line) ? `${line} 💀` : line;
 
-    if (roast) return type === "provocation" && bauaaMentioned ? replies.toxicOwner : replies.roast;
+    if (roast) {
+        const options = type === "provocation" && bauaaMentioned ? replies.toxicOwner : replies.roast;
+        const position = roastFallbackPositions.get(options) ?? 0;
+        roastFallbackPositions.set(options, (position + 1) % options.length);
+        return options[position];
+    }
     if (type === "affection" && mood === "romantic") return replies.romantic;
     if (type === "provocation" && bauaaMentioned) return replies.owner;
     return replies[type];

@@ -891,10 +891,12 @@ test("handler: affection and direct jabs sound short and distinct across moods",
     assert.equal(requests.length, 2, "a dismissal needs no Groq request");
 });
 
-test("handler: Very Toxic drops casual replies and questions, keeps one roast, and respects the selected language", async () => {
+test("handler: Very Toxic keeps different model roasts and rotates fallbacks when needed", async () => {
     await setupGuild("very_toxic");
     const modelReplies = [
         "Theek hai bhai 😏\nYe bakchodi kahan se seekhi? 😏",
+        "Tera roast dekh ke toh autocorrect ne bhi resign kar diya.",
+        "Kuch aur bolna hai? 🤡",
         "Kya bolu? Tera logic full bakchodi hai. 💀\nAur kuch?",
         "આપ કેમ છો? 🤡",
         "Ye kaafi mushkil lag raha hai.",
@@ -905,21 +907,36 @@ test("handler: Very Toxic drops casual replies and questions, keeps one roast, a
         return streamOf([modelReplies.shift()]);
     });
 
-    for (const [content, expected] of [
-        ["Ohh achha", "Itni bakchodi aur punchline abhi bhi loading pe hai 💀"],
-        ["No way", "Tera logic full bakchodi hai. 💀"],
-        ["Vo noob hain, Gujarati ma jawab aapo.", "આટલી બકચોદી પછીય જોક હજી લોડ થાય છે 💀"],
-        ["I'm feeling hopeless", "Ye kaafi mushkil lag raha hai."],
+    const replies = [];
+    for (const [content, userId] of [
+        ["Nice", U1],
+        ["Tu mc hain", U1],
+        ["Repeated answer kyu diya", U2],
+        ["No way", U1],
+        ["Vo noob hain, Gujarati ma jawab aapo.", U1],
+        ["I'm feeling hopeless", U1],
     ]) {
-        const message = makeMessage({ content });
+        const message = makeMessage({ content, userId });
         await messageCreate.execute(message);
         await waitIdle();
-        assert.deepEqual(message.replies, [expected]);
-        assert.equal(conversations.getConversation(G1, U1).at(-1).parts[0].text, expected);
+        assert.equal(message.replies.length, 1);
+        const [reply] = message.replies;
+        replies.push(reply);
+        assert.equal(conversations.getConversation(G1, userId).at(-1).parts[0].text, reply);
     }
 
-    assert.match(prompts[2], /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Gujarati/);
-    assert.match(prompts[3], /Respond calmly to genuine distress/);
+    const [firstFallback, modelRoast, secondFallback, roastWithEmoji, gujaratiFallback, emotionalReply] = replies;
+    assert.notEqual(firstFallback, secondFallback);
+    for (const fallback of [firstFallback, secondFallback, gujaratiFallback]) {
+        assert.match(fallback, /\p{Extended_Pictographic}$/u);
+        assert.doesNotMatch(fallback, /\?/);
+    }
+    assert.equal(modelRoast, "Tera roast dekh ke toh autocorrect ne bhi resign kar diya. 💀");
+    assert.equal(roastWithEmoji, "Tera logic full bakchodi hai. 💀");
+    assert.match(gujaratiFallback, /^\p{Script=Gujarati}/u);
+    assert.equal(emotionalReply, "Ye kaafi mushkil lag raha hai.");
+    assert.match(prompts[4], /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Gujarati/);
+    assert.match(prompts[5], /Respond calmly to genuine distress/);
 });
 
 test("handler: keeps a complete short reaction and skips the rest of a long social reply", async () => {
@@ -931,6 +948,81 @@ test("handler: keeps a complete short reaction and skips the rest of a long soci
     await waitIdle();
     assert.deepEqual(message.replies, ["Aww, tum bhi sweet ho."]);
     assert.equal(conversations.getConversation(G1, U1).at(-1).parts[0].text, "Aww, tum bhi sweet ho.");
+});
+
+test("handler: today's India music ranks come directly from Apple Music in published order", async t => {
+    await setupGuild("romantic");
+    let groqCalls = 0;
+    mockCreate(async () => { groqCalls += 1; return streamOf(["Unused"]); });
+    const items = Array.from({ length: 10 }, (_, index) => ({
+        rankingText: String(index + 1), title: `Track ${index + 1}`,
+        subtitleLinks: [{ title: `Artist ${index + 1}` }, { title: "Featured Artist" }],
+    }));
+    const data = [{ data: { sections: [{ id: "most-played", items }] } }];
+    const fetchMock = t.mock.method(globalThis, "fetch", async () => new Response(
+        `<script type="application/json" id="serialized-server-data">${JSON.stringify({ data })}</script>`
+    ));
+
+    const message = makeMessage({ content: "Suggest me indian top10 trending songs" });
+    await messageCreate.execute(message);
+    await waitIdle();
+    const [reply] = message.replies;
+    assert.equal(groqCalls, 0);
+    assert.equal(fetchMock.mock.calls[0].arguments[0], "https://music.apple.com/in/new/top-charts/songs");
+    assert.match(reply, /Chart check kiya .+ IST/);
+    assert.deepEqual(reply.split("\n").filter(line => /^\d+\./.test(line)),
+        items.map((item, index) => `${index + 1}. ${item.title} — Artist ${index + 1}, Featured Artist`));
+    assert.match(reply, /<https:\/\/music\.apple\.com\/in\/new\/top-charts\/songs>$/);
+});
+
+test("handler: searches fresh facts, cites the chart returned by Groq, and rejects an unofficial substitute", async () => {
+    await setupGuild("very_toxic");
+    const spotify = "https://charts.spotify.com/charts/view/regional-in-daily/2026-11-25";
+    const requests = [];
+    mockCreate(async body => {
+        requests.push(body);
+        if (body.stream) return streamOf(["Itni bakchodi bhi free mein nahi milti 💀"]);
+        const url = requests.length === 1 ? spotify : "https://spotify-top.com/charts/in/daily";
+        return { choices: [{ finish_reason: "stop", message: {
+            content: "Spotify India chart, 25 November 2026 【1†L4-L14】\n1. Example Track — Example Artist",
+            executed_tools: [{ type: "browser.open", index: 1, search_results: { results: [{ url }] } }],
+        } }] };
+    });
+
+    const chart = makeMessage({ content: "Suggest me Spotify India top10 trending songs. Reply in English." });
+    await messageCreate.execute(chart);
+    await waitIdle();
+    const first = requests[0];
+    assert.equal(first.stream, false);
+    assert.equal(first.tool_choice, "required");
+    assert.deepEqual(first.tools, [{ type: "browser_search" }]);
+    assert.match(first.messages[0].content, /CURRENT DATE AND TIME IN INDIA: .+\(Asia\/Kolkata\)/);
+    assert.match(first.messages[0].content, /Answer the factual request directly/);
+    assert.doesNotMatch(first.messages[0].content, /Deliver one sharp, profane punchline/);
+    assert.match(chart.replies[0], /Spotify India chart, 25 November 2026[\s\S]+1\. Example Track/);
+    assert.ok(chart.replies[0].includes(`<${spotify}>`));
+    assert.doesNotMatch(chart.replies[0], /【1†/);
+
+    const followUp = makeMessage({ content: "But Spotify pe latest wali. Reply in English." });
+    await messageCreate.execute(followUp);
+    await waitIdle();
+    assert.deepEqual(requests[1].messages.slice(1).map(item => item.content), [chart.content, followUp.content]);
+    assert.deepEqual(followUp.replies, ["I couldn't verify current information for this request."]);
+
+    const ordinary = makeMessage({ content: "No way" });
+    await messageCreate.execute(ordinary);
+    await waitIdle();
+    assert.equal(requests[2].stream, true);
+    assert.equal(requests[2].tools, undefined);
+});
+
+test("handler: a search without source evidence does not expose unsupported facts", async () => {
+    await setupGuild();
+    mockCreate(async () => ({ choices: [{ finish_reason: "stop", message: { content: "Invented latest score." } }] }));
+    const message = makeMessage({ content: "Latest cricket score batao" });
+    await messageCreate.execute(message);
+    await waitIdle();
+    assert.deepEqual(message.replies, ["Main is request ki live information verify nahi kar paayi."]);
 });
 
 test("handler: Romantic carries mature flirtation guidance to longer replies", async () => {

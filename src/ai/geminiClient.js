@@ -11,6 +11,7 @@ const { createAIError, describeError } = require("./aiErrors");
 let groqClient = null;
 const modelCooldowns = new Map();
 const DEFAULT_COOLDOWN_SECONDS = 60;
+const SEARCH_MODELS = new Set(["openai/gpt-oss-20b", "openai/gpt-oss-120b"]);
 
 function getGroqClient() {
     const apiKey = process.env.GROQ_API_KEY;
@@ -157,7 +158,8 @@ function classifyError(error, { timedOut }) {
  * @param {AbortSignal} [options.signal]   Cancels the request
  * @param {number}   [options.maxTokens]   Output limit for this request
  * @param {number}   [options.temperature] Sampling temperature
- * @param {object}   [options.meta]        Filled with { finishReason, model, attempts, usage }
+ * @param {boolean}  [options.liveSearch]  Use Groq browser search and return a complete reply
+ * @param {object}   [options.meta]        Filled with finish reason, model, attempts, usage, and search sources
  * @returns {Promise<string>} the full response text
  */
 async function generateAIResponseStream({
@@ -168,6 +170,7 @@ async function generateAIResponseStream({
     signal,
     maxTokens,
     temperature,
+    liveSearch = false,
     meta,
 }) {
     if (!message || typeof message !== "string" || !message.trim()) {
@@ -195,14 +198,21 @@ async function generateAIResponseStream({
             settings.maxOutputTokens,
             Number.isFinite(maxTokens) && maxTokens > 0 ? Math.floor(maxTokens) : settings.maxOutputTokens
         ),
-        stream: true,
+        stream: !liveSearch,
     };
+    if (liveSearch) {
+        body.tools = [{ type: "browser_search" }];
+        body.tool_choice = "required";
+    }
 
-    const runModel = model => streamOnModel(client, { ...body, model }, { settings, signal, onText, meta });
-    if (!settings.fallbackModel) return runModel(settings.model);
+    const configuredModels = [settings.model, settings.fallbackModel].filter(Boolean);
+    const models = liveSearch ? configuredModels.filter(model => SEARCH_MODELS.has(model)) : configuredModels;
+    if (!models.length) models.push("openai/gpt-oss-20b");
+    const runModel = model => completeOnModel(client, { ...body, model }, { settings, signal, onText, meta });
+    if (models.length === 1) return runModel(models[0]);
 
     let earliestRetryAt = Infinity;
-    for (const model of [settings.model, settings.fallbackModel]) {
+    for (const model of models) {
         const blockedUntil = modelCooldowns.get(model);
         if (blockedUntil > Date.now()) {
             earliestRetryAt = Math.min(earliestRetryAt, blockedUntil);
@@ -229,7 +239,7 @@ async function generateAIResponseStream({
     });
 }
 
-async function streamOnModel(client, body, { settings, signal, onText, meta }) {
+async function completeOnModel(client, body, { settings, signal, onText, meta }) {
     const { model } = body;
     // GPT-OSS models spend part of the completion budget on reasoning.
     if (settings.reasoningEffort && /gpt-oss/i.test(model)) {
@@ -256,13 +266,26 @@ async function streamOnModel(client, body, { settings, signal, onText, meta }) {
         try {
             console.log(`Groq Request | Model: ${model} | Attempt: ${attempt}/${maxAttempts}`);
 
-            const stream = await client.chat.completions.create(body, { signal: controller.signal });
+            const result = await client.chat.completions.create(body, { signal: controller.signal });
+            if (controller.signal.aborted) throw makeAbortError();
+
+            if (!body.stream) {
+                const choice = result.choices?.[0];
+                if (meta && typeof meta === "object") {
+                    Object.assign(meta, {
+                        finishReason: choice?.finish_reason, model, attempts: attempt, usage: result.usage,
+                        searchTools: choice?.message?.executed_tools,
+                    });
+                }
+                const answer = choice?.message?.content;
+                return typeof answer === "string" ? answer.trim() : "";
+            }
 
             let fullResponse = "";
             let finishReason = null;
             let usage = null;
 
-            for await (const chunk of stream) {
+            for await (const chunk of result) {
                 if (signal?.aborted) throw makeAbortError();
 
                 const choice = chunk.choices?.[0];
