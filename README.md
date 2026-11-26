@@ -375,7 +375,7 @@ Public Spotify link playback needs no Spotify credentials. For Spotify account l
 
 In the existing Render web service, open **Settings → Build → Source → Edit**. Select the **Docker** runtime, use the repository root as the build context, and set the Dockerfile path to `./Dockerfile`. Keep the service's `DISCORD_TOKEN`, `MONGODB_URI`, and any optional provider credentials in its **Environment** settings. Set the health check path to `/ready`.
 
-The image starts BauaaCore on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It configures the bot for both command groups and includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
+By default the image starts BauaaCore in the `all` role on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
 Check for `BauaaCore instance role: all` and `[Music] Lavalink primary connected` in the Render logs. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
 
@@ -385,7 +385,9 @@ Set the environment variables in the Render web service settings. Use `npm ci` f
 
 To enable the YouTube audio resolver on the Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. Use Node.js 22 or newer and redeploy the bot. Lavalink can then fetch YouTube audio through the bot when the YouTube stream URL is bound to the bot's IP.
 
-To run music on your PC while BauaaCore on Render handles regular commands, set `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. A Render instance with no explicit Lavalink URL and password runs in the `general` role and registers the full slash command list. Use `BAUAA_INSTANCE_ROLE=all` for a standalone instance. Run only one instance for each command group per Discord bot token.
+#### Run music on your PC and general commands on Render
+
+Set `BAUAA_INSTANCE_ROLE=general` in Render's environment and `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. With this setup the Render Docker service starts the bot without Lavalink. The general instance registers the full slash command list, and the music instance handles music commands and player buttons. Start the PC instance with `npm.cmd start` and check for `BauaaCore instance role: general` on Render and `BauaaCore instance role: music` on the PC.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
 

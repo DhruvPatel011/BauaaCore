@@ -1,29 +1,28 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const { resolve } = require("node:path");
+const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
 
 const root = resolve(__dirname, "..");
 const host = "127.0.0.1";
 const audioPort = "2333";
 const botPort = process.env.PORT || "10000";
-const password = process.env.LAVALINK_PASSWORD || randomBytes(32).toString("hex");
+const instanceRole = getInstanceRole({ BAUAA_INSTANCE_ROLE: process.env.BAUAA_INSTANCE_ROLE });
+const withAudio = handlesCommand(instanceRole, true);
 const botEnv = {
     ...process.env,
-    BAUAA_INSTANCE_ROLE: "all",
-    BAUAA_EMBEDDED_LAVALINK: "1",
-    LAVALINK_URL: `http://${host}:${audioPort}`,
-    LAVALINK_PASSWORD: password,
-    MUSIC_MEDIA_BASE_URL: `http://${host}:${botPort}`,
-    MUSIC_YTDLP_PATH: resolve(root, ".tools", "yt-dlp"),
+    BAUAA_INSTANCE_ROLE: instanceRole,
+    BAUAA_EMBEDDED_LAVALINK: withAudio ? "1" : "0",
     PORT: botPort,
 };
-const audioEnv = {
-    ...process.env,
-    LAVALINK_PASSWORD: password,
-    SERVER_ADDRESS: host,
-    SERVER_PORT: audioPort,
-    SPRING_PROFILES_ACTIVE: "render",
-};
+if (withAudio) {
+    Object.assign(botEnv, {
+        LAVALINK_URL: `http://${host}:${audioPort}`,
+        LAVALINK_PASSWORD: process.env.LAVALINK_PASSWORD || randomBytes(32).toString("hex"),
+        MUSIC_MEDIA_BASE_URL: `http://${host}:${botPort}`,
+        MUSIC_YTDLP_PATH: resolve(root, ".tools", "yt-dlp"),
+    });
+}
 
 function start(name, command, args, cwd, env) {
     const child = spawn(command, args, { cwd, env, stdio: "inherit" });
@@ -52,7 +51,13 @@ let stopping = false;
 function startAudio() {
     audio = start("Lavalink", "java", [
         "-XX:MaxRAMPercentage=35.0", "-XX:+ExitOnOutOfMemoryError", "-jar", "Lavalink.jar",
-    ], resolve(root, "music-node"), audioEnv);
+    ], resolve(root, "music-node"), {
+        ...process.env,
+        LAVALINK_PASSWORD: botEnv.LAVALINK_PASSWORD,
+        SERVER_ADDRESS: host,
+        SERVER_PORT: audioPort,
+        SPRING_PROFILES_ACTIVE: "render",
+    });
     void audio.closed.then(({ code, signal }) => {
         if (stopping) return;
         console.warn(`[Render] Lavalink stopped (${signal ?? code}). Retrying in 5 seconds.`);
@@ -65,11 +70,11 @@ async function shutdown(code) {
     stopping = true;
     clearTimeout(restartTimer);
     await stop(bot);
-    await stop(audio);
+    if (audio) await stop(audio);
     process.exitCode = code;
 }
 
-startAudio();
+if (withAudio) startAudio();
 const bot = start("BauaaCore", process.execPath, [resolve(root, "src", "index.js")], root, botEnv);
 void bot.closed.then(({ code, signal }) => {
     if (stopping) return;

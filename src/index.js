@@ -114,6 +114,7 @@ client.commands = new Collection();
 const instanceRole = getInstanceRole();
 const handlesMusic = handlesCommand(instanceRole, true);
 const handlesGeneral = handlesCommand(instanceRole, false);
+const reportsMusicOffline = instanceRole === "general" && !process.env.BAUAA_INSTANCE_ROLE?.trim();
 const music = installMusic(client, { enabled: handlesMusic });
 const musicCommandNames = new Set(music.commands.map(command => command.data.name));
 console.log(`BauaaCore instance role: ${instanceRole}`);
@@ -488,7 +489,7 @@ client.on("interactionCreate", async (interaction) => {
                             error?.code || error?.name
                         )
                     );
-                } else if (instanceRole === "general") {
+                } else if (reportsMusicOffline) {
                     await musicOfflineFallback(interaction);
                 }
             }
@@ -499,12 +500,8 @@ client.on("interactionCreate", async (interaction) => {
     const command = client.commands.get(interaction.commandName);
     const isMusicCommand = musicCommandNames.has(interaction.commandName);
 
-    if (instanceRole === "general" && isMusicCommand) {
-        await musicOfflineFallback(interaction);
-        return;
-    }
-
     if (!command || !handlesCommand(instanceRole, isMusicCommand)) {
+        if (reportsMusicOffline && isMusicCommand) await musicOfflineFallback(interaction);
         return;
     }
 
