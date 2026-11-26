@@ -9,7 +9,7 @@ const { WebSocketServer } = createRequire(require.resolve("lavalink-client"))("w
 const { installMusic, definitions, slashData } = require("../src/music/commands");
 const { library, defaultSettings } = require("../src/music/library");
 const { createMediaCache } = require("../src/music/media");
-const { checkedQuery, parseSpotifyEmbed, matchTrack, matchSoundCloudTrack, directProviderTrack } = require("../src/music/sources");
+const { checkedQuery, parseSpotifyEmbed, matchTrack, matchSoundCloudTrack, directProviderTrack, searchTracks } = require("../src/music/sources");
 const { ytDlpErrorDetail } = require("../src/music/shared");
 
 const guildId = "111111111111111111";
@@ -176,6 +176,49 @@ test("YouTube playback reuses search metadata and still supports direct streams 
     assert.deepEqual(requests, [media]);
 });
 
+test("local YouTube playback tries the stream before downloading the full track", async () => {
+    const video = "https://www.youtube.com/watch?v=abcdefghijk";
+    const url = "https://rr1.googlevideo.com/videoplayback?signature=short-lived";
+    const knownInfo = { uri: video, sourceName: "youtube", title: "A Video" };
+    const requester = { id: userId };
+    const extract = async () => ({ stdout: JSON.stringify({ url, title: "A Video" }) });
+    const playable = encoded => ({ encoded, info: { sourceName: "http" } });
+    let downloads = 0;
+    let available = true;
+    const node = { async search({ query }) {
+        assert.equal(query, url);
+        return { tracks: available ? [playable("direct")] : [] };
+    } };
+    const download = async () => { downloads++; return playable("cached"); };
+    const load = () => directProviderTrack(node, video, requester, "yt-dlp", extract, download, knownInfo, undefined,
+        { preferDirect: true });
+    assert.equal((await load()).encoded, "direct");
+    assert.equal(downloads, 0);
+    available = false;
+    assert.equal((await load()).encoded, "cached");
+    assert.equal(downloads, 1);
+});
+
+test("slow name search starts the backup whilst preserving the primary result", { timeout: 3000 }, async () => {
+    const primary = { encoded: "primary" };
+    const backup = { encoded: "backup" };
+    await Promise.all([[primary], []].map(async tracks => {
+        let release;
+        const waiting = new Promise(resolve => { release = resolve; });
+        const node = { async search({ source }) {
+            if (source === "ytsearch") {
+                await waiting;
+                return { tracks };
+            }
+            assert.equal(source, "scsearch");
+            release();
+            return { tracks: [backup] };
+        } };
+        const result = await searchTracks(node, "Artist song", { id: userId });
+        assert.deepEqual(result.tracks, tracks.length ? [primary] : [backup]);
+    }));
+});
+
 test("yt-dlp diagnostics keep the error reason and redact URLs and credentials", () => {
     const stderr = Buffer.from("WARNING: attempt failed\nERROR: Could not load https://video.test/download?token=signed Authorization: Bearer secret\n");
     assert.equal(ytDlpErrorDetail({ stderr }), "Could not load [url] [redacted]");
@@ -245,6 +288,9 @@ test("music controls update one public panel without routine replies and preserv
     const tracks = [rawTrack("first-track", "First song"), rawTrack("secondtrack", "Second song")];
     const alternate = { ...rawTrack("soundcloud-first", "First song"),
         info: { ...tracks[0].info, identifier: "soundcloud-first", sourceName: "soundcloud", uri: "https://soundcloud.com/artist/first-song" } };
+    const secondAlternate = { ...rawTrack("soundcloud-second", "Second song"),
+        info: { ...tracks[1].info, identifier: "soundcloud-second", sourceName: "soundcloud", uri: "https://soundcloud.com/artist/second-song" } };
+    const soundCloudSearches = [];
     const sent = [];
     const voiceUpdates = [];
     const cards = [];
@@ -265,8 +311,15 @@ test("music controls update one public panel without routine replies and preserv
         if (url.pathname === "/version") return res.end("4.2.2");
         if (url.pathname === "/v4/loadtracks") {
             const identifier = url.searchParams.get("identifier");
-            if (identifier.startsWith("ytsearch:")) return res.end(JSON.stringify({ loadType: "search", data: tracks }));
-            if (identifier.startsWith("scsearch:")) return res.end(JSON.stringify({ loadType: "search", data: [alternate] }));
+            if (identifier.startsWith("ytsearch:")) {
+                const data = identifier === "ytsearch:Second song" ? tracks.slice(1) : tracks;
+                return res.end(JSON.stringify({ loadType: "search", data }));
+            }
+            if (identifier.startsWith("scsearch:")) {
+                soundCloudSearches.push(identifier);
+                const data = identifier === "scsearch:second song Artist" ? [secondAlternate] : [alternate];
+                return res.end(JSON.stringify({ loadType: "search", data }));
+            }
             return res.end(JSON.stringify({ loadType: "playlist", data: { info: { name: "Test playlist", selectedTrack: -1 }, tracks } }));
         }
         if (req.method === "DELETE") { res.statusCode = 204; return res.end(); }
@@ -279,7 +332,7 @@ test("music controls update one public panel without routine replies and preserv
         if (payload.track) {
             if (!payload.track.encoded) end("stopped");
             else {
-                current = [...tracks, alternate].find(item => item.encoded === payload.track.encoded);
+                current = [...tracks, alternate, secondAlternate].find(item => item.encoded === payload.track.encoded);
                 sent.push(current.info.title);
                 send({ op: "event", type: "TrackStartEvent", guildId, track: current });
             }
@@ -316,14 +369,15 @@ test("music controls update one public panel without routine replies and preserv
     } };
     client.channels = { cache: guild.channels.cache, fetch: async id => id === textId ? text : null };
     const settings = { ...defaultSettings, djRole: "666666666666666666", djCommands: ["skip"] };
-    const music = installMusic(client, { data: { settings: async () => settings }, env: {
-        BAUAA_EMBEDDED_LAVALINK: "1",
+    const env = {
         LAVALINK_URL: `http://127.0.0.1:${server.address().port}`, LAVALINK_PASSWORD: "test-password",
         MUSIC_YTDLP_PATH: "./missing-test-yt-dlp",
-    } });
+    };
+    const startup = installMusic(new EventEmitter(), { env: { ...env, BAUAA_EMBEDDED_LAVALINK: "1" } });
+    assert.equal(startup.audioStatus(), "starting");
+    assert.throws(() => startup.nodeFor(guildId), /starting up/);
+    const music = installMusic(client, { data: { settings: async () => settings }, env });
     t.after(async () => { await music.close(); });
-    assert.equal(music.audioStatus(), "starting");
-    assert.throws(() => music.nodeFor(guildId), /starting up/);
     await music.start();
     await waitFor(() => music.audioStatus() === "connected");
     function interaction(values) {
@@ -409,4 +463,16 @@ test("music controls update one public panel without routine replies and preserv
     await music.commands.find(item => item.data.name === "play").execute(playByName);
     await waitFor(() => current?.info.sourceName === "soundcloud");
     assert.equal(playByName.deleted, true);
+
+    const queuedByName = interaction({ query: "Second song" });
+    await music.commands.find(item => item.data.name === "play").execute(queuedByName);
+    assert.equal(queuedByName.deleted, true);
+    const nextSearches = () => soundCloudSearches.filter(query => query === "scsearch:second song Artist").length;
+    await waitFor(() => nextSearches() === 1);
+    assert.equal(current.info.title, "First song");
+    const skipByCommand = interaction({});
+    await music.commands.find(item => item.data.name === "skip").execute(skipByCommand);
+    assert.equal(skipByCommand.deleted, true);
+    await waitFor(() => current?.info.identifier === "soundcloud-second");
+    assert.equal(nextSearches(), 1);
 });

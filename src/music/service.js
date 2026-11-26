@@ -68,6 +68,8 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const voiceWork = new Map();
     const activeVoice = new Map();
     const selections = new Map();
+    const trackPreparers = new WeakMap();
+    const prefetchingNodes = new WeakSet();
     const manager = nodes.length ? new LavalinkManager({
         nodes,
         sendToShard: (guildId, packet) => client.guilds.cache.get(guildId)?.shard.send(packet),
@@ -89,10 +91,15 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         console.warn(`[Music] ${event}`, error?.code || error?.name || "failed");
     }
 
+    function isLocalNode(node) {
+        return !embedded && !node.options.secure && ["127.0.0.1", "localhost"].includes(node.options.host);
+    }
+
     async function providerTrack(node, url, requester, info) {
         const provider = streamProvider(url);
         try {
-            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info, media.loadHls);
+            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info, media.loadHls,
+                { preferDirect: isLocalNode(node) });
             if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
@@ -243,41 +250,63 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         const track = manager.utils.buildUnresolvedTrack({ info: { ...reference,
             sourceName: reference.source, isSeekable: true } }, requester);
         track.userData = { musicReference: reference };
-        track.resolve = async player => {
+        async function findPlayable(node) {
             let result = candidate;
             if (reference.kind === "match") {
-                result = await matchTrack(player.node, reference, requester, extractor ? candidate => {
+                result = await matchTrack(node, reference, requester, extractor ? candidate => {
                     if (!streamProvider(candidate.info.uri)) return candidate;
-                    return providerTrack(player.node, candidate.info.uri, requester, candidate.info);
+                    return providerTrack(node, candidate.info.uri, requester, candidate.info);
                 } : undefined);
             } else {
                 const uri = result?.info.uri || reference.url;
                 if (extractor && streamProvider(uri)) {
-                    const playable = await providerTrack(player.node, uri, requester, result?.info);
+                    const playable = await providerTrack(node, uri, requester, result?.info);
                     if (playable) result = playable;
                     else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
-                        player.node.info?.sourceManagers?.includes("soundcloud")) {
-                        const alternate = await matchSoundCloudTrack(player.node, result, requester, {
+                        node.info?.sourceManagers?.includes("soundcloud")) {
+                        const alternate = await matchSoundCloudTrack(node, result, requester, {
                             binary: extractor,
-                            resolve: url => providerTrack(player.node, url, requester),
+                            resolve: url => providerTrack(node, url, requester),
                         }).catch(error => {
                             warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
                             return null;
                         });
                         if (alternate) {
-                            result = { ...alternate, info: { ...alternate.info, title: result.info.title, author: result.info.author } };
+                            Object.assign(alternate.info, { title: result.info.title, author: result.info.author });
+                            result = alternate;
                             console.info("[Music] Using a matched SoundCloud track after YouTube audio resolution failed");
                         }
                     }
                 }
-                if (!result) result = (await searchTracks(player.node, reference.url, requester, { mediaHosts }).catch(() => null))?.tracks?.[0];
+                if (!result) result = (await searchTracks(node, reference.url, requester, { mediaHosts }).catch(() => null))?.tracks?.[0];
             }
+            return result;
+        }
+
+        let preparation;
+        function prepare(node) {
+            if (preparation?.node === node && preparation.expires > Date.now() && media.isAvailable(preparation.track)) {
+                return preparation.pending;
+            }
+            const entry = { node, expires: Infinity, pending: findPlayable(node) };
+            preparation = entry;
+            void entry.pending.then(result => {
+                entry.track = result;
+                entry.expires = result?.encoded ? Date.now() + 5 * 60_000 : 0;
+            }, () => { entry.expires = 0; });
+            return entry.pending;
+        }
+        trackPreparers.set(track, prepare);
+
+        track.resolve = async player => {
+            const result = await prepare(player.node);
             if (!result?.encoded) {
                 player.queue.current = null;
                 const error = new MusicError("No playable match was found for this track.");
                 error.track = track;
                 throw error;
             }
+            trackPreparers.delete(track);
             delete track.resolve;
             delete track[UnresolvedTrackSymbol];
             Object.defineProperty(track, TrackSymbol, { value: true, configurable: true });
@@ -285,6 +314,19 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             return track;
         };
         return track;
+    }
+
+    function prefetchNext(player) {
+        const next = player.queue.tracks[0];
+        const prepare = trackPreparers.get(next);
+        const node = player.node;
+        if (!prepare || !player.queue.current || playerFor(player.guildId) !== player ||
+            !isLocalNode(node) || prefetchingNodes.has(node)) return;
+        prefetchingNodes.add(node);
+        void prepare(node).catch(error => warn("queue preparation", error)).finally(() => {
+            prefetchingNodes.delete(node);
+            if (player.queue.tracks[0] !== next) prefetchNext(player);
+        });
     }
 
     async function enqueue(interaction, ctx, tracks, { stored = false, first = false, allowAlternateSource = false } = {}) {
@@ -313,7 +355,10 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             if (!player.queue.current && !player.playing) {
                 throw new MusicError("The player couldn’t find playable audio for those tracks.");
             }
-        } else void refresh(player).catch(error => warn("queue panel", error));
+        } else {
+            prefetchNext(player);
+            void refresh(player).catch(error => warn("queue panel", error));
+        }
         return { player, amount: queued.length, omitted: tracks.length - queued.length };
     }
 
@@ -512,6 +557,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         manager.on("trackStart", player => {
             player.deleteData("votes");
             player.deleteData("sponsorSegments");
+            prefetchNext(player);
             void sync(player, true).catch(error => warn("track start", error));
         });
         manager.on("playerUpdate", (_, player) => {

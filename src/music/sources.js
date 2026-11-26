@@ -195,11 +195,11 @@ function resolvedProviderTrack(track, input, provider, info) {
     return track;
 }
 
-async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls) {
+async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls, { preferDirect = false } = {}) {
     const provider = binary && streamProvider(input);
     if (!provider) return null;
     const useKnownInfo = provider === "youtube" && knownInfo?.sourceName === "youtube" && knownInfo.uri === input && !knownInfo.isStream;
-    if (useKnownInfo && fallback) {
+    if (!preferDirect && useKnownInfo && fallback) {
         // The download can reuse the search result's metadata and avoid a second yt-dlp invocation.
         const hosted = await fallback(node, input, requester, binary).catch(error => {
             // Direct streams can still work when the audio cannot fit in the cache or has a different format.
@@ -226,15 +226,14 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         if (!resource.pathname.endsWith(".m3u8")) return null;
         return resolvedProviderTrack(await loadHls?.(node, resource.href, requester), input, provider, info);
     }
-    // The URL YouTube issues to the bot may be bound to its IP. If the bot can
-    // serve the audio, let Lavalink load it from the bot before trying that URL.
-    let track = provider === "youtube" && !useKnownInfo && !knownInfo?.isStream
-        ? await fallback?.(node, input, requester, binary).catch(() => null) : null;
+    // A separate Lavalink host may be unable to open a YouTube URL bound to the bot's IP.
+    const loadCached = () => fallback?.(node, input, requester, binary).catch(() => null);
+    let track = provider === "youtube" && !preferDirect && !useKnownInfo && !knownInfo?.isStream ? await loadCached() : null;
     if (!track) {
         const result = await node.search({ query: resource.href }, requester).catch(() => null);
         track = result?.tracks?.[0];
     }
-    if (!track && provider === "soundcloud") track = await fallback?.(node, input, requester, binary).catch(() => null);
+    if (!track && (provider === "soundcloud" || (preferDirect && !knownInfo?.isStream))) track = await loadCached();
     return resolvedProviderTrack(track, input, provider, info);
 }
 
@@ -254,10 +253,26 @@ async function searchTracks(node, input, requester, options = {}) {
     if (typeof query === "string") {
         const sources = options.source ? [options.source] : searchSources;
         let failed;
-        for (const source of sources) {
-            const result = await node.search({ query, source }, requester).catch(error => { failed = error; });
-            if (result?.tracks?.length) return { tracks: result.tracks, selection: true };
+        const find = async source => {
+            try {
+                const result = await node.search({ query, source }, requester);
+                if (result.loadType === "error") failed = true;
+                return result.tracks || [];
+            } catch {
+                failed = true;
+                return [];
+            }
+        };
+        let alternate;
+        const timer = sources.length > 1 && setTimeout(() => { alternate = find(sources[1]); }, 1500);
+        let tracks;
+        try {
+            tracks = await find(sources[0]);
+        } finally {
+            clearTimeout(timer);
         }
+        if (!tracks.length && sources.length > 1) tracks = await (alternate || find(sources[1]));
+        if (tracks.length) return { tracks, selection: true };
         if (failed) throw new MusicError("The music search provider is unavailable. Try a link or `/playfile`.");
         return { tracks: [] };
     }

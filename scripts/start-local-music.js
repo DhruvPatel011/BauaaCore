@@ -2,6 +2,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
+const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
 
 const javaEnv = { ...process.env };
 process.chdir(join(__dirname, ".."));
@@ -46,10 +47,22 @@ async function waitForLavalink(url, password) {
 }
 
 async function start() {
-    const url = new URL(process.env.LAVALINK_URL || "http://127.0.0.1:2333");
+    const automatic = process.argv[2] === "--auto";
     const password = process.env.LAVALINK_PASSWORD;
-    if (url.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(url.hostname) ||
-        url.pathname !== "/" || url.username || url.password || url.search || url.hash) {
+    if (automatic && (process.platform !== "win32" || process.env.RENDER === "true" || !password ||
+        !handlesCommand(getInstanceRole(), true))) return require("../src/index");
+
+    let url;
+    try {
+        url = new URL(process.env.LAVALINK_URL || "http://127.0.0.1:2333");
+    } catch (error) {
+        if (automatic) return require("../src/index");
+        throw new Error("Set LAVALINK_URL to a local HTTP origin for this launcher.", { cause: error });
+    }
+    const local = url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname) &&
+        url.pathname === "/" && !url.username && !url.password && !url.search && !url.hash;
+    if (!local) {
+        if (automatic) return require("../src/index");
         throw new Error("Set LAVALINK_URL to a local HTTP origin for this launcher.");
     }
     if (!process.env.DISCORD_TOKEN || !process.env.MONGODB_URI || !password) {
@@ -97,8 +110,8 @@ async function start() {
         }
     }
 
-    console.log("Local Lavalink is ready. Starting BauaaCore in music mode.");
-    process.env.BAUAA_INSTANCE_ROLE = "music";
+    if (!automatic) process.env.BAUAA_INSTANCE_ROLE = "music";
+    console.log("Local Lavalink is ready. Starting BauaaCore.");
     require("../src/index");
 }
 

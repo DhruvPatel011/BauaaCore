@@ -335,7 +335,9 @@ npm start
 
 ### Run the music server
 
-For local music-only mode, open this folder in VS Code, select **BauaaCore Music** under **Run and Debug**, and press **F5**. You can also run `npm.cmd run start:music` from the VS Code PowerShell terminal. The launcher starts Lavalink from `music-node/Lavalink.jar` with Java 17 or newer and waits for it to be ready before connecting the bot. It also works with a local Lavalink process that's already running with the same password.
+On Windows, run `npm.cmd start` from the repository root. With a loopback `LAVALINK_URL` and `LAVALINK_PASSWORD` configured, BauaaCore uses a running Lavalink process with that password or starts `music-node/Lavalink.jar` with Java 17 or newer. The launcher waits for Lavalink before connecting to Discord and uses the bot role configured in `.env`.
+
+To launch specifically in music mode, select **BauaaCore Music** in the VS Code **Run and Debug** menu and press **F5**, or run `npm.cmd run start:music`.
 
 Configure these settings in `.env` to enable music.
 
@@ -359,15 +361,7 @@ docker compose --env-file .env -f music-node/compose.yaml up -d
 npm start
 ```
 
-For a native Windows setup, install Java 17 or newer and place `Lavalink.jar` from the [Lavalink 4.2.2 release](https://github.com/lavalink-devs/Lavalink/releases/tag/4.2.2) in `music-node`. Run these PowerShell commands from the repository root after installing the bot dependencies.
-
-```powershell
-$env:LAVALINK_PASSWORD = node -p "require('dotenv').parse(require('node:fs').readFileSync('.env')).LAVALINK_PASSWORD"
-Set-Location music-node
-java -jar Lavalink.jar
-```
-
-Lavalink downloads its plugins at startup. Start the bot from the repository root in a separate terminal with `npm.cmd start`. Use `/debug` to check the audio node and `/playfile` with an MP3 to test playback. The bot needs View Channel, Connect, and Speak. Stage playback needs Stage moderator permissions. Announcements need Send Messages and Embed Links in the configured channel.
+For native Windows playback, place `Lavalink.jar` from the [Lavalink 4.2.2 release](https://github.com/lavalink-devs/Lavalink/releases/tag/4.2.2) in `music-node`. Lavalink downloads any missing plugins at startup. Use `/debug` to check the audio node and `/playfile` with an MP3 to test playback. The bot needs View Channel, Connect, and Speak. Stage playback needs Stage moderator permissions. Announcements need Send Messages and Embed Links in the configured channel.
 
 For a hosted bot, set `LAVALINK_URL` to an audio node reachable via HTTP and WebSocket. The node needs access to the Discord voice gateway and outbound UDP. Both processes must stay online for `/247`.
 

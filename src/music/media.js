@@ -11,6 +11,7 @@ const mediaPrefix = "/music/audio/";
 
 function createMediaCache(address, exec = execute) {
     const audio = new Map();
+    const cachedTracks = new WeakMap();
     let origin;
     let bytes = 0;
     let busy = 0;
@@ -39,8 +40,10 @@ function createMediaCache(address, exec = execute) {
             audio.set(id, { body: stdout, extension, type, expires: Date.now() + 7200000 });
             bytes += stdout.length;
             const result = await node.search({ query: `${origin}${mediaPrefix}${id}.${extension}` }, requester).catch(() => null);
-            if (!result?.tracks?.length) remove(id);
-            return result?.tracks?.[0] || null;
+            const track = result?.tracks?.[0];
+            if (track) cachedTracks.set(track, id);
+            else remove(id);
+            return track || null;
         } finally {
             busy--;
         }
@@ -94,7 +97,12 @@ function createMediaCache(address, exec = execute) {
         return true;
     }
 
-    return { load, loadHls, handleHttp };
+    function isAvailable(track) {
+        const id = cachedTracks.get(track);
+        return !id || audio.get(id)?.expires > Date.now();
+    }
+
+    return { load, loadHls, handleHttp, isAvailable };
 }
 
 module.exports = { createMediaCache };
