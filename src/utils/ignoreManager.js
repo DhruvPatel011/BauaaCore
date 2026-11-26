@@ -124,15 +124,6 @@ async function shouldSkipIgnoredEvent(eventName, args) {
 
     } else if (eventName.startsWith("guildBan")) {
         add(first?.user?.id);
-
-    } else if (eventName === "voiceStateUpdate") {
-        add(args[0]?.id);
-        add(args[0]?.member?.id);
-        add(args[0]?.member?.user?.id);
-
-        add(args[1]?.id);
-        add(args[1]?.member?.id);
-        add(args[1]?.member?.user?.id);
     }
 
     const guild =

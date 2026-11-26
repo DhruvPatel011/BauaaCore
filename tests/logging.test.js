@@ -199,7 +199,7 @@ test("duplicate delivery of a message deletion writes one log per destination", 
     assert.equal(channels.all.sent.length, 2);
 });
 
-test("voice channel activity skips bots and logs a person's join and leave once per session", async () => {
+test("voice channel activity skips bots and logs each join and leave when the session ID repeats", async () => {
     const { guild, addChannel } = createGuild();
     const logs = await setupLogging(guild);
     const voice = addChannel("voice", { type: ChannelType.GuildVoice });
@@ -221,7 +221,7 @@ test("voice channel activity skips bots and logs a person's join and leave once 
     assert.equal(await db.collection("voice_sessions").findOne({ guildId: guild.id, userId: bot.user.id }), null);
 
     const human = member(false);
-    for (const sessionId of ["first-session", "second-session"]) {
+    for (const sessionId of ["first-session", "first-session", "second-session"]) {
         const joined = { guild, member: human, channel: voice, sessionId };
         const left = { ...joined, channel: null };
         await Promise.all([voiceStateUpdate.execute(left, joined), voiceStateUpdate.execute(left, joined)]);
@@ -230,9 +230,68 @@ test("voice channel activity skips bots and logs a person's join and leave once 
     const summaries = logs.voice.sent.map(item => item.embeds[0].toJSON());
     assert.deepEqual(summaries.map(log => log.title), [
         "🟢 Voice Channel Joined", "🔴 Voice Channel Left", "🟢 Voice Channel Joined", "🔴 Voice Channel Left",
+        "🟢 Voice Channel Joined", "🔴 Voice Channel Left",
     ]);
     for (const log of summaries.filter(item => item.title.includes("Left"))) assert.match(log.description, /Duration\*\*\n\d+s/);
-    assert.equal(logs.all.sent.length, 4);
+    assert.equal(logs.all.sent.length, 6);
+});
+
+test("rapid voice changes use gateway IDs when the member and channels are missing from cache", async () => {
+    const { guild } = createGuild();
+    const logs = await setupLogging(guild);
+    const userId = newId();
+    const firstChannelId = newId();
+    const secondChannelId = newId();
+    const user = { id: userId, bot: false, tag: "Uncached member", displayAvatarURL: () => "https://example.com/avatar.png" };
+    const fetched = [];
+    guild.client = { users: { async fetch(id) { fetched.push(id); return user; } } };
+
+    const state = { guild, id: userId, channelId: null, sessionId: "repeated-session" };
+    function moveTo(channelId) {
+        const previous = { ...state };
+        state.channelId = channelId;
+        return voiceStateUpdate.execute(previous, state);
+    }
+
+    const ignored = db.collection("ignored_entities");
+    await ignored.insertOne({ guildId: guild.id, id: userId });
+    await moveTo(firstChannelId);
+    await moveTo(null);
+    assert.deepEqual(fetched, []);
+    assert.equal(logs.voice.sent.length, 0);
+    assert.equal(logs.all.sent.length, 0);
+    await ignored.deleteOne({ guildId: guild.id, id: userId });
+
+    await Promise.all([moveTo(firstChannelId), moveTo(secondChannelId), moveTo(null), moveTo(firstChannelId), moveTo(null)]);
+    const entries = logs.voice.sent.map(item => item.embeds[0].toJSON());
+    assert.deepEqual(entries.map(log => log.title), [
+        "🟢 Voice Channel Joined", "🔄 Voice Channel Moved", "🔴 Voice Channel Left",
+        "🟢 Voice Channel Joined", "🔴 Voice Channel Left",
+    ]);
+    assert.ok(entries[0].description.includes(`<@${userId}>`));
+    assert.ok(entries[1].description.includes(`<#${firstChannelId}>`));
+    assert.ok(entries[1].description.includes(`<#${secondChannelId}>`));
+    assert.match(entries[2].description, /Duration\*\*\n\d+s/);
+    assert.equal(logs.all.sent.length, 5);
+    assert.equal(await db.collection("voice_sessions").findOne({ guildId: guild.id, userId }), null);
+});
+
+test("voice logs still reach all-logs if the dedicated destination rejects a send", async t => {
+    const { guild, addChannel } = createGuild();
+    const logs = await setupLogging(guild);
+    t.mock.method(console, "error", () => {});
+    t.mock.method(logs.voice, "send", async () => { throw new Error("Missing access"); });
+    const user = { id: newId(), bot: false, tag: "Member", displayAvatarURL: () => "https://example.com/avatar.png" };
+    const left = { guild, member: { user }, channelId: null, sessionId: "session" };
+    const joined = { ...left, channelId: addChannel("voice", { type: ChannelType.GuildVoice }).id };
+
+    await voiceStateUpdate.execute(left, joined);
+    await voiceStateUpdate.execute(joined, left);
+
+    assert.deepEqual(logs.all.sent.map(item => item.embeds[0].toJSON().title), [
+        "🟢 Voice Channel Joined", "🔴 Voice Channel Left",
+    ]);
+    assert.equal(console.error.mock.callCount(), 2);
 });
 
 test("logging rechecks a destination if its permissions change during an audit lookup", async () => {

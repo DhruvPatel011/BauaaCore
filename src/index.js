@@ -162,7 +162,8 @@ function registerEvent(eventName, handler, logger = null) {
     if (!handlesGeneral) return;
     client.on(eventName, async (...args) => {
         try {
-            if (await shouldSkipIgnoredEvent(eventName, args)) {
+            // Voice logging must snapshot the cached states before any asynchronous filtering.
+            if (eventName !== events.voiceStateUpdate.name && await shouldSkipIgnoredEvent(eventName, args)) {
                 return;
             }
         } catch (error) {

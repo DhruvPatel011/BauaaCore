@@ -1,23 +1,25 @@
 
 const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
-const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
+const { sendConfiguredLog } = require("../utils/logger");
 const { getDatabase } = require("../config/database");
 const { isIgnored } = require("../utils/ignoreManager");
-const { claimLogEvent } = require("../utils/logEvents");
+const { claimVoiceTransition } = require("../utils/logEvents");
+
+const pendingUpdates = new Map();
 
 // ========================================
 // TIME HELPERS
 // ========================================
 
-function getDuration(startTime) {
+function getDuration(startTime, endTime) {
     const start = new Date(startTime).getTime();
 
     if (!Number.isFinite(start)) {
         return "Unknown";
     }
 
-    const durationMs = Math.max(0, Date.now() - start);
+    const durationMs = Math.max(0, endTime.getTime() - start);
     const totalSeconds = Math.floor(durationMs / 1000);
 
     const days = Math.floor(totalSeconds / 86400);
@@ -38,7 +40,7 @@ function getDuration(startTime) {
     return parts.join(" ");
 }
 
-function getTime(date = new Date()) {
+function getTime(date) {
     return new Intl.DateTimeFormat("en-IN", {
         timeZone: "Asia/Kolkata",
         day: "2-digit",
@@ -65,474 +67,462 @@ function getVoiceSessions() {
 
 async function sendVoiceLog({
     guild,
-    logChannel,
     embed,
     title,
     description,
     color,
 }) {
-    // Dedicated voice log
-    if (logChannel) {
-        await sendConfiguredLog(guild, "voice", {
-            embeds: [embed],
-        });
+    const [voiceResult] = await Promise.allSettled([
+        sendConfiguredLog(guild, "voice", { embeds: [embed] }),
+        sendAllLog({ guild, title, description, color }),
+    ]);
+    if (voiceResult.status === "rejected") {
+        console.error(`❌ Voice log delivery failed in guild ${guild.id}:`, voiceResult.reason);
     }
-
-    // All logs
-    await sendAllLog({
-        guild,
-        title,
-        description,
-        color,
-    });
 }
 
 // ========================================
 // MAIN EVENT
 // ========================================
 
-module.exports = {
-    name: "voiceStateUpdate",
+async function logVoiceUpdate({
+    guild, userId, cachedUser, oldChannelId, newChannelId, oldChannelName, newChannelName,
+    sessionId, muteChanged, serverMute, deafChanged, serverDeaf, occurredAt,
+}) {
+    if (await isIgnored(guild.id, userId)) {
+        console.log(`⏭️ Voice logs ignored for ID ${userId} in guild ${guild.id}`);
+        return;
+    }
 
-    async execute(oldState, newState) {
-        const guild = newState.guild || oldState.guild;
+    // Discord may omit the member from a voice-state update.
+    const user = cachedUser || await guild.client.users.fetch(userId);
+    const changedChannel = oldChannelId !== newChannelId;
+    if (changedChannel) {
+        if (user.bot) return;
+        if (!(await claimVoiceTransition(guild.id, userId, sessionId, oldChannelId, newChannelId))) return;
+    }
 
-        if (!guild) return;
+    const mention = `<@${userId}>`;
+    const oldChannel = oldChannelId ? `<#${oldChannelId}>` : null;
+    const newChannel = newChannelId ? `<#${newChannelId}>` : null;
+    const sessions = getVoiceSessions();
+    const sessionKey = { guildId: guild.id, userId };
 
-        const member = newState.member || oldState.member;
+    // ========================================
+    // JOIN
+    // ========================================
 
-        if (!member || !member.user) return;
+    if (!oldChannel && newChannel) {
+        const joinedAt = occurredAt;
 
-        const user = member.user;
-        const oldChannel = oldState.channel;
-        const newChannel = newState.channel;
-        const changedChannel = oldChannel?.id !== newChannel?.id;
+        await sessions.updateOne(
+            sessionKey,
+            {
+                $set: {
+                    guildId: guild.id,
+                    userId: user.id,
+                    channelId: newChannelId,
+                    joinedAt,
+                },
+            },
+            {
+                upsert: true,
+            }
+        );
 
-        if (user.bot && changedChannel) return;
+        const embed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle("🟢 Voice Channel Joined")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-                // Suppress every supported voice log for ignored IDs
-        if (await isIgnored(guild.id, user.id)) {
-            console.log(`⏭️ Voice logs ignored for $DIL2`);
-            return;
+                `📍 **Channel**\n` +
+                `${newChannel}\n\n` +
+
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
+
+                `🕐 **Joined At**\n` +
+                `${getTime(joinedAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
+            });
+
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🟢 Voice Channel Joined",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${newChannel}`,
+            color: 0x57F287,
+        });
+
+        console.log(
+            `🟢 ${user.tag} joined ${newChannelName}`
+        );
+
+        return;
+    }
+
+    // ========================================
+    // LEAVE
+    // ========================================
+
+    if (oldChannel && !newChannel) {
+        const session = await sessions.findOne(sessionKey);
+
+        let duration = "Unknown";
+
+        if (session?.joinedAt) {
+            duration = getDuration(session.joinedAt, occurredAt);
         }
 
+        // Remove completed session
+        await sessions.deleteOne(sessionKey);
 
-        // Database
-        const sessions = getVoiceSessions();
+        const leftAt = occurredAt;
 
-        // Voice log channel
-        const logChannel = await getLogChannel(guild, "voice");
-        if (changedChannel && (!oldChannel || !newChannel)) {
-            const voiceSession = (newChannel ? newState : oldState).sessionId;
-            const event = newChannel ? "voiceJoin" : "voiceLeave";
-            if (voiceSession && !(await claimLogEvent(guild.id, event, user.id, voiceSession))) return;
-        }
+        const embed = new EmbedBuilder()
+            .setColor(0xED4245)
+            .setTitle("🔴 Voice Channel Left")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-        const sessionKey = {
-            guildId: guild.id,
-            userId: user.id,
-        };
+                `📍 **Channel**\n` +
+                `${oldChannel}\n\n` +
 
-        // ========================================
-        // JOIN
-        // ========================================
+                `⏱️ **Duration**\n` +
+                `${duration}\n\n` +
 
-        if (!oldChannel && newChannel) {
-            const joinedAt = new Date();
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
+                `🕐 **Left At**\n` +
+                `${getTime(leftAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
+            });
+
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔴 Voice Channel Left",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${oldChannel}\n\n` +
+                `⏱️ **Duration**\n${duration}`,
+            color: 0xED4245,
+        });
+
+        console.log(
+            `🔴 ${user.tag} left ${oldChannelName} • Duration: ${duration}`
+        );
+
+        return;
+    }
+
+    // ========================================
+    // MOVE
+    // ========================================
+
+    if (changedChannel) {
+        const session = await sessions.findOne(sessionKey);
+
+        if (session) {
+            // Preserve original join timestamp
+            await sessions.updateOne(
+                sessionKey,
+                {
+                    $set: {
+                        channelId: newChannelId,
+                    },
+                }
+            );
+        } else {
+            // No previous session available
             await sessions.updateOne(
                 sessionKey,
                 {
                     $set: {
                         guildId: guild.id,
                         userId: user.id,
-                        channelId: newChannel.id,
-                        joinedAt,
+                        channelId: newChannelId,
+                        joinedAt: occurredAt,
                     },
                 },
                 {
                     upsert: true,
                 }
             );
-
-            const embed = new EmbedBuilder()
-                .setColor(0x57F287)
-                .setTitle("🟢 Voice Channel Joined")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
-
-                    `📍 **Channel**\n` +
-                    `${newChannel}\n\n` +
-
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
-
-                    `🕐 **Joined At**\n` +
-                    `${getTime(joinedAt)} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
-
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🟢 Voice Channel Joined",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${newChannel}`,
-                color: 0x57F287,
-            });
-
-            console.log(
-                `🟢 ${user.tag} joined ${newChannel.name}`
-            );
-
-            return;
         }
 
-        // ========================================
-        // LEAVE
-        // ========================================
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle("🔄 Voice Channel Moved")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-        if (oldChannel && !newChannel) {
-            const session = await sessions.findOne(sessionKey);
+                `📤 **From**\n` +
+                `${oldChannel}\n\n` +
 
-            let duration = "Unknown";
+                `📥 **To**\n` +
+                `${newChannel}\n\n` +
 
-            if (session?.joinedAt) {
-                duration = getDuration(session.joinedAt);
-            }
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
-            // Remove completed session
-            await sessions.deleteOne(sessionKey);
-
-            const leftAt = new Date();
-
-            const embed = new EmbedBuilder()
-                .setColor(0xED4245)
-                .setTitle("🔴 Voice Channel Left")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
-
-                    `📍 **Channel**\n` +
-                    `${oldChannel}\n\n` +
-
-                    `⏱️ **Duration**\n` +
-                    `${duration}\n\n` +
-
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
-
-                    `🕐 **Left At**\n` +
-                    `${getTime(leftAt)} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
-
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔴 Voice Channel Left",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${oldChannel}\n\n` +
-                    `⏱️ **Duration**\n${duration}`,
-                color: 0xED4245,
+                `🕐 **Moved At**\n` +
+                `${getTime(occurredAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
             });
 
-            console.log(
-                `🔴 ${user.tag} left ${oldChannel.name} • Duration: ${duration}`
-            );
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔄 Voice Channel Moved",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📤 **From**\n${oldChannel}\n\n` +
+                `📥 **To**\n${newChannel}`,
+            color: 0x5865F2,
+        });
 
-            return;
-        }
+        console.log(
+            `🔄 ${user.tag} moved: ${oldChannelName} → ${newChannelName}`
+        );
 
-        // ========================================
-        // MOVE
-        // ========================================
+        return;
+    }
 
-        if (
-            oldChannel &&
-            newChannel &&
-            oldChannel.id !== newChannel.id
-        ) {
-            const session = await sessions.findOne(sessionKey);
+    // ========================================
+    // SERVER MUTE
+    // ========================================
 
-            if (session) {
-                // Preserve original join timestamp
-                await sessions.updateOne(
-                    sessionKey,
-                    {
-                        $set: {
-                            channelId: newChannel.id,
-                        },
-                    }
-                );
-            } else {
-                // No previous session available
-                await sessions.updateOne(
-                    sessionKey,
-                    {
-                        $set: {
-                            guildId: guild.id,
-                            userId: user.id,
-                            channelId: newChannel.id,
-                            joinedAt: new Date(),
-                        },
-                    },
-                    {
-                        upsert: true,
-                    }
-                );
-            }
+    if (muteChanged && serverMute) {
+        const embed = new EmbedBuilder()
+            .setColor(0xF1C40F)
+            .setTitle("🔇 Member Server Muted")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-            const embed = new EmbedBuilder()
-                .setColor(0x5865F2)
-                .setTitle("🔄 Voice Channel Moved")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
+                `📍 **Channel**\n` +
+                `${newChannel || oldChannel}\n\n` +
 
-                    `📤 **From**\n` +
-                    `${oldChannel}\n\n` +
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
-                    `📥 **To**\n` +
-                    `${newChannel}\n\n` +
-
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
-
-                    `🕐 **Moved At**\n` +
-                    `${getTime()} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
-
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔄 Voice Channel Moved",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📤 **From**\n${oldChannel}\n\n` +
-                    `📥 **To**\n${newChannel}`,
-                color: 0x5865F2,
+                `🕐 **Muted At**\n` +
+                `${getTime(occurredAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
             });
 
-            console.log(
-                `🔄 ${user.tag} moved: ${oldChannel.name} → ${newChannel.name}`
-            );
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔇 Member Server Muted",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${newChannel || oldChannel}`,
+            color: 0xF1C40F,
+        });
 
-            return;
-        }
+        return;
+    }
 
-        // ========================================
-        // SERVER MUTE
-        // ========================================
+    // ========================================
+    // SERVER UNMUTE
+    // ========================================
 
-        if (
-            !oldState.serverMute &&
-            newState.serverMute
-        ) {
-            const embed = new EmbedBuilder()
-                .setColor(0xF1C40F)
-                .setTitle("🔇 Member Server Muted")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
+    if (muteChanged) {
+        const embed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle("🔊 Member Server Unmuted")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-                    `📍 **Channel**\n` +
-                    `${newChannel || oldChannel}\n\n` +
+                `📍 **Channel**\n` +
+                `${newChannel || oldChannel}\n\n` +
 
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
-                    `🕐 **Muted At**\n` +
-                    `${getTime()} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
-
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔇 Member Server Muted",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${newChannel || oldChannel}`,
-                color: 0xF1C40F,
+                `🕐 **Unmuted At**\n` +
+                `${getTime(occurredAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
             });
 
-            return;
-        }
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔊 Member Server Unmuted",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${newChannel || oldChannel}`,
+            color: 0x57F287,
+        });
 
-        // ========================================
-        // SERVER UNMUTE
-        // ========================================
+        return;
+    }
 
-        if (
-            oldState.serverMute &&
-            !newState.serverMute
-        ) {
-            const embed = new EmbedBuilder()
-                .setColor(0x57F287)
-                .setTitle("🔊 Member Server Unmuted")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
+    // ========================================
+    // SERVER DEAFEN
+    // ========================================
 
-                    `📍 **Channel**\n` +
-                    `${newChannel || oldChannel}\n\n` +
+    if (deafChanged && serverDeaf) {
+        const embed = new EmbedBuilder()
+            .setColor(0xF1C40F)
+            .setTitle("🔕 Member Server Deafened")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
+                `📍 **Channel**\n` +
+                `${newChannel || oldChannel}\n\n` +
 
-                    `🕐 **Unmuted At**\n` +
-                    `${getTime()} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔊 Member Server Unmuted",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${newChannel || oldChannel}`,
-                color: 0x57F287,
+                `🕐 **Deafened At**\n` +
+                `${getTime(occurredAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
             });
 
-            return;
-        }
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔕 Member Server Deafened",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${newChannel || oldChannel}`,
+            color: 0xF1C40F,
+        });
 
-        // ========================================
-        // SERVER DEAFEN
-        // ========================================
+        return;
+    }
 
-        if (
-            !oldState.serverDeaf &&
-            newState.serverDeaf
-        ) {
-            const embed = new EmbedBuilder()
-                .setColor(0xF1C40F)
-                .setTitle("🔕 Member Server Deafened")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
+    // ========================================
+    // SERVER UNDEAFEN
+    // ========================================
 
-                    `📍 **Channel**\n` +
-                    `${newChannel || oldChannel}\n\n` +
+    if (deafChanged) {
+        const embed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle("🔔 Member Server Undeafened")
+            .setThumbnail(
+                user.displayAvatarURL({
+                    size: 256,
+                })
+            )
+            .setDescription(
+                `👤 **User**\n` +
+                `${mention} \`${user.tag}\`\n\n` +
 
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
+                `📍 **Channel**\n` +
+                `${newChannel || oldChannel}\n\n` +
 
-                    `🕐 **Deafened At**\n` +
-                    `${getTime()} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
+                `🆔 **User ID**\n` +
+                `\`${user.id}\`\n\n` +
 
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔕 Member Server Deafened",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${newChannel || oldChannel}`,
-                color: 0xF1C40F,
+                `🕐 **Undeafened At**\n` +
+                `${getTime(occurredAt)} IST`
+            )
+            .setFooter({
+                text: "BauaaCore • Voice Logs",
             });
 
-            return;
-        }
+        await sendVoiceLog({
+            guild,
+            embed,
+            title: "🔔 Member Server Undeafened",
+            description:
+                `👤 **User**\n${mention}\n\n` +
+                `📍 **Channel**\n${newChannel || oldChannel}`,
+            color: 0x57F287,
+        });
+    }
+}
 
-        // ========================================
-        // SERVER UNDEAFEN
-        // ========================================
+module.exports = {
+    name: "voiceStateUpdate",
 
-        if (
-            oldState.serverDeaf &&
-            !newState.serverDeaf
-        ) {
-            const embed = new EmbedBuilder()
-                .setColor(0x57F287)
-                .setTitle("🔔 Member Server Undeafened")
-                .setThumbnail(
-                    user.displayAvatarURL({
-                        size: 256,
-                    })
-                )
-                .setDescription(
-                    `👤 **User**\n` +
-                    `${member} \`${user.tag}\`\n\n` +
+    async execute(oldState, newState) {
+        const guild = newState.guild || oldState.guild;
+        const cachedUser = newState.member?.user || oldState.member?.user;
+        const userId = newState.id || oldState.id || cachedUser?.id;
+        if (!guild || !userId) return;
 
-                    `📍 **Channel**\n` +
-                    `${newChannel || oldChannel}\n\n` +
+        // discord.js can patch the new state in place when the next gateway event arrives.
+        const oldChannel = oldState.channel;
+        const newChannel = newState.channel;
+        const oldChannelId = oldState.channelId ?? oldChannel?.id ?? null;
+        const newChannelId = newState.channelId ?? newChannel?.id ?? null;
+        const serverMute = Boolean(newState.serverMute);
+        const serverDeaf = Boolean(newState.serverDeaf);
+        const muteChanged = Boolean(oldState.serverMute) !== serverMute;
+        const deafChanged = Boolean(oldState.serverDeaf) !== serverDeaf;
+        if (oldChannelId === newChannelId && !muteChanged && !deafChanged) return;
 
-                    `🆔 **User ID**\n` +
-                    `\`${user.id}\`\n\n` +
-
-                    `🕐 **Undeafened At**\n` +
-                    `${getTime()} IST`
-                )
-                .setFooter({
-                    text: "BauaaCore • Voice Logs",
-                });
-
-            await sendVoiceLog({
-                guild,
-                logChannel,
-                embed,
-                title: "🔔 Member Server Undeafened",
-                description:
-                    `👤 **User**\n${member}\n\n` +
-                    `📍 **Channel**\n${newChannel || oldChannel}`,
-                color: 0x57F287,
-            });
+        const update = {
+            guild, userId, cachedUser, oldChannelId, newChannelId,
+            oldChannelName: oldChannel?.name ?? oldChannelId,
+            newChannelName: newChannel?.name ?? newChannelId,
+            sessionId: (newChannelId ? newState : oldState).sessionId ?? null,
+            muteChanged, serverMute, deafChanged, serverDeaf, occurredAt: new Date(),
+        };
+        const key = `${guild.id}:${userId}`;
+        const previous = pendingUpdates.get(key) ?? Promise.resolve();
+        const pending = previous.catch(() => {}).then(() => logVoiceUpdate(update));
+        pendingUpdates.set(key, pending);
+        try {
+            await pending;
+        } finally {
+            if (pendingUpdates.get(key) === pending) pendingUpdates.delete(key);
         }
     },
 };
