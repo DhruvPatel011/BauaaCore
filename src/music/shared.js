@@ -7,6 +7,21 @@ const noMentions = { parse: [], repliedUser: false };
 const ytDlpOptions = ["--ignore-config", "--no-warnings", "--js-runtimes", "node", "--no-playlist",
     "--socket-timeout", "10", "--retries", "1", "--extractor-retries", "1"];
 
+function ytDlpErrorDetail(error) {
+    const output = error.stderr?.toString() || "";
+    const status = /\bHTTP Error (\d{3})\b/i.exec(output)?.[1];
+    if (/sign in|login required/i.test(output)) return "upstream requested sign-in";
+    if (error.killed) return "audio resolution timed out";
+    if (status) return `upstream returned HTTP ${status}`;
+    if (/requested format is not available/i.test(output)) return "no supported audio format returned";
+    const lines = output.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const line = lines.findLast(value => /^ERROR:/i.test(value)) || lines.at(-1);
+    return line?.replace(/^ERROR:\s*/i, "")
+        .replace(/\bhttps?:\/\/[^\s<>]+/gi, "[url]")
+        .replace(/\b(?:authorization|cookie|(?:access|refresh)[ _-]?token|token|password|api[ _-]?key|visitor[ _-]?data|signature)\s*[:=].*/gi, "[redacted]")
+        .replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 240) || "audio resolution failed";
+}
+
 function musicText(value, limit = 100) {
     return escapeMarkdown(String(value || "Unknown").replace(/[\r\n\t]+/g, " ").slice(0, limit));
 }
@@ -45,4 +60,4 @@ function trackLink(track) {
     }
 }
 
-module.exports = { MusicError, TRACK_LIMIT, noMentions, ytDlpOptions, musicText, duration, trackTitle, trackLines, trackLink };
+module.exports = { MusicError, TRACK_LIMIT, noMentions, ytDlpOptions, ytDlpErrorDetail, musicText, duration, trackTitle, trackLines, trackLink };

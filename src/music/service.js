@@ -5,7 +5,7 @@ const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalin
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
-const { MusicError, TRACK_LIMIT, noMentions, trackTitle } = require("./shared");
+const { MusicError, TRACK_LIMIT, noMentions, trackTitle, ytDlpErrorDetail } = require("./shared");
 const { playerPanel, disconnectedPanel } = require("./panel");
 const filters = require("./filters");
 
@@ -93,14 +93,7 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
             if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
-            const output = error.stderr?.toString() || "";
-            const status = /\bHTTP Error (\d{3})\b/i.exec(output)?.[1];
-            const detail = /sign in|login required/i.test(output) ? "upstream requested sign-in"
-                : error.killed ? "audio resolution timed out"
-                : status ? `upstream returned HTTP ${status}`
-                : /requested format is not available/i.test(output) ? "no supported audio format returned"
-                : "audio resolution failed";
-            warn(`yt-dlp ${provider}: ${detail}`, error);
+            warn(`yt-dlp ${provider}: ${ytDlpErrorDetail(error)}`, error);
             return null;
         }
     }

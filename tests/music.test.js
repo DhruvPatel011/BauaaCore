@@ -10,6 +10,7 @@ const { installMusic, definitions, slashData } = require("../src/music/commands"
 const { library, defaultSettings } = require("../src/music/library");
 const { createMediaCache } = require("../src/music/media");
 const { checkedQuery, parseSpotifyEmbed, matchTrack, matchSoundCloudTrack, directProviderTrack } = require("../src/music/sources");
+const { ytDlpErrorDetail } = require("../src/music/shared");
 
 const guildId = "111111111111111111";
 const voiceId = "222222222222222222";
@@ -146,12 +147,22 @@ test("YouTube playback reuses search metadata and still supports direct streams 
 
     const timeout = Object.assign(new Error("Audio download timed out"), { killed: true });
     await assert.rejects(directProviderTrack(node, video, requester, "yt-dlp", extract, async () => { throw timeout; }, knownInfo), timeout);
+    const failed = Object.assign(new Error("Audio download failed"), { code: 1, stderr: Buffer.from("ERROR: Unable to download the video data") });
+    await assert.rejects(directProviderTrack(node, video, requester, "yt-dlp", extract, async () => { throw failed; }, knownInfo), failed);
     assert.equal(probes, 0);
 
     const direct = await directProviderTrack(node, video, requester, "yt-dlp", extract, async () => null, knownInfo);
     assert.equal(direct.encoded, "direct-audio");
     assert.equal(probes, 1);
     assert.deepEqual(requests, [media]);
+});
+
+test("yt-dlp diagnostics keep the error reason and redact URLs and credentials", () => {
+    const stderr = Buffer.from("WARNING: attempt failed\nERROR: Could not load https://video.test/download?token=signed Authorization: Bearer secret\n");
+    assert.equal(ytDlpErrorDetail({ stderr }), "Could not load [url] [redacted]");
+    assert.equal(ytDlpErrorDetail({ stderr: "\nyt-dlp: runtime could not start\n" }), "yt-dlp: runtime could not start");
+    assert.equal(ytDlpErrorDetail({ stderr: "ERROR: HTTP Error 403: Forbidden" }), "upstream returned HTTP 403");
+    assert.equal(ytDlpErrorDetail({ stderr: "ERROR: Requested format is not available" }), "no supported audio format returned");
 });
 
 test("SoundCloud fallback matches the recording and rejects remixes and different artists", async () => {

@@ -174,8 +174,9 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
     if (useKnownInfo && fallback) {
         // The download can reuse the search result's metadata and avoid a second yt-dlp invocation.
         const hosted = await fallback(node, input, requester, binary).catch(error => {
-            if (error.killed || error.code === "ENOENT") throw error;
-            return null;
+            // Direct streams can still work when the audio cannot fit in the cache or has a different format.
+            if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /requested format is not available/i.test(error.stderr?.toString() || "")) return null;
+            throw error;
         });
         const ready = resolvedProviderTrack(hosted, input, provider, knownInfo);
         if (ready) return ready;
