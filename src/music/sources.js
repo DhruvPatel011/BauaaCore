@@ -150,8 +150,14 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
     const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com"];
     if (resource.protocol !== "https:" || resource.username || resource.password || resource.port ||
         !isSource(resource.hostname, mediaDomains)) return null;
-    const result = await node.search({ query: resource.href }, requester).catch(() => null);
-    const track = result?.tracks?.[0] || await fallback?.(node, input, requester, binary);
+    // The URL YouTube issues to the bot may be bound to its IP. If the bot can
+    // serve the audio, let Lavalink load it from the bot before trying that URL.
+    let track = provider === "youtube" ? await fallback?.(node, input, requester, binary) : null;
+    if (!track) {
+        const result = await node.search({ query: resource.href }, requester).catch(() => null);
+        track = result?.tracks?.[0];
+    }
+    if (!track && provider === "soundcloud") track = await fallback?.(node, input, requester, binary);
     if (!track?.encoded || track.info.sourceName !== "http") return null;
     const duration = Number(metadata.duration) * 1000;
     Object.assign(track.info, { uri: input, sourceName: provider, identifier: String(metadata.id || track.info.identifier),

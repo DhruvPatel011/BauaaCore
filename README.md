@@ -375,6 +375,8 @@ Public Spotify link playback needs no Spotify credentials. For Spotify account l
 
 Set the environment variables in the Render web service settings. Use `npm ci` for the build command and `npm start` for the start command. Render provides `PORT`.
 
+To enable the YouTube audio resolver on the Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. Use Node.js 22 or newer and redeploy the bot. Lavalink can then fetch YouTube audio through the bot when the YouTube stream URL is bound to the bot's IP.
+
 Keep one BauaaCore instance connected per Discord bot token. Stop the hosted or local instance before starting the other with the same token.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.

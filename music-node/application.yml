@@ -20,6 +20,7 @@ lavalink:
       local: false
       nico: false
     youtubePlaylistLoadLimit: 5
+    trackStuckThresholdMs: 30000
     playerUpdateInterval: 3
     soundcloudFilterOutPreviewTracks: true
 

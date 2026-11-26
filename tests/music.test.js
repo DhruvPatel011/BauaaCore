@@ -114,6 +114,31 @@ test("audio fallback serves private links and byte ranges for Lavalink seeking",
     assert.deepEqual(result, { encoded: "cached-audio" });
 });
 
+test("YouTube playback prefers audio served by the bot and still supports direct streams", async () => {
+    const video = "https://www.youtube.com/watch?v=abcdefghijk";
+    const media = "https://rr1.googlevideo.com/videoplayback?signature=short-lived";
+    const requester = { id: userId };
+    const extract = async () => ({ stdout: JSON.stringify({ url: media, title: "A Video" }) });
+    const httpTrack = encoded => ({ encoded, info: { sourceName: "http", title: "Unknown title" } });
+    const requests = [];
+    const node = { search: async ({ query }) => {
+        requests.push(query);
+        return { tracks: [httpTrack("direct-audio")] };
+    } };
+    const hosted = await directProviderTrack(node, video, requester, "yt-dlp", extract,
+        async (...args) => {
+            assert.deepEqual(args, [node, video, requester, "yt-dlp"]);
+            return httpTrack("hosted-audio");
+        });
+    assert.equal(hosted.encoded, "hosted-audio");
+    assert.equal(hosted.info.uri, video);
+    assert.deepEqual(requests, []);
+
+    const direct = await directProviderTrack(node, video, requester, "yt-dlp", extract, async () => null);
+    assert.equal(direct.encoded, "direct-audio");
+    assert.deepEqual(requests, [media]);
+});
+
 function rawTrack(id, title) {
     return { encoded: `encoded-${id}`, info: { identifier: id, title, author: "Artist", length: 90000, isSeekable: true,
         isStream: false, sourceName: "youtube", uri: `https://www.youtube.com/watch?v=${id}` }, pluginInfo: {}, userData: {} };
