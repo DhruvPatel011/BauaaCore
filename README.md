@@ -335,6 +335,8 @@ npm start
 
 ### Run the music server
 
+For local music-only mode, open this folder in VS Code, select **BauaaCore Music** under **Run and Debug**, and press **F5**. You can also run `npm.cmd run start:music` from the VS Code PowerShell terminal. The launcher starts Lavalink from `music-node/Lavalink.jar` with Java 17 or newer and waits for it to be ready before connecting the bot. It also works with a local Lavalink process that's already running with the same password.
+
 Configure these settings in `.env` to enable music.
 
 | Variable | Purpose |

@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "start:music": "node scripts/start-local-music.js",
     "test": "node --test tests/*.test.js"
   },
   "keywords": [
