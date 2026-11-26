@@ -62,5 +62,6 @@ jobs:
               --mount "type=bind,src=$RUNNER_TEMP/render-bot.js,dst=/app/src/index.js,readonly" bauaacore:render-test)
           trap 'docker logs "$container"; docker rm -f "$container"' EXIT
           curl --fail --silent --show-error --retry 40 --retry-delay 2 --retry-all-errors --max-time 4 http://127.0.0.1:18080/
+          docker exec "$container" ffmpeg -v error -f lavfi -i sine=frequency=440:duration=0.25 -c:a libmp3lame -f mp3 /tmp/audio-check.mp3
           docker stop --time 25 "$container"
           test "$(docker inspect --format '{{.State.ExitCode}}' "$container")" -eq 0

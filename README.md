@@ -348,6 +348,8 @@ Configure these settings in `.env` to enable music.
 
 For YouTube audio resolution, install [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) and Node.js 22 or newer on the bot host. Run BauaaCore and Lavalink on the same internet connection because YouTube can bind stream URLs to the origin IP. The optional audio fallback uses up to 64 MiB of memory and accepts clips up to 16 MiB each.
 
+SoundCloud's HLS audio fallback also needs FFmpeg on the bot host's `PATH`. The combined Render image includes it.
+
 From the repository root, start the included node with Docker Compose.
 
 ```bash

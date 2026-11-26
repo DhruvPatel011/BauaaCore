@@ -92,7 +92,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     async function providerTrack(node, url, requester, info) {
         const provider = streamProvider(url);
         try {
-            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info);
+            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info, media.loadHls);
             if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
@@ -257,9 +257,15 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                     if (playable) result = playable;
                     else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
                         player.node.info?.sourceManagers?.includes("soundcloud")) {
-                        const alternate = await matchSoundCloudTrack(player.node, result, requester);
+                        const alternate = await matchSoundCloudTrack(player.node, result, requester, {
+                            binary: extractor,
+                            resolve: url => providerTrack(player.node, url, requester),
+                        }).catch(error => {
+                            warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
+                            return null;
+                        });
                         if (alternate) {
-                            result = alternate;
+                            result = { ...alternate, info: { ...alternate.info, title: result.info.title, author: result.info.author } };
                             console.info("[Music] Using a matched SoundCloud track after YouTube audio resolution failed");
                         }
                     }

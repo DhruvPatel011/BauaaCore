@@ -16,7 +16,7 @@ RUN cd music-node && sh install-plugins.sh
 
 FROM node:24-bookworm-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openjdk-17-jre-headless tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg openjdk-17-jre-headless tini \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -o node -g node /app/music-node/logs
 

@@ -129,20 +129,48 @@ async function matchTrack(node, reference, requester, resolve = track => track, 
 function recordingTitle({ title, author }) {
     const name = normalized(title.split("|", 1)[0].replace(/\s*\((?:official (?:music )?video|official audio|lyrics?)\)\s*$/i, ""));
     const artist = normalized(author);
-    return artist && name.startsWith(`${artist} `) ? name.slice(artist.length + 1) : name;
+    if (artist && name.startsWith(`${artist} `)) return name.slice(artist.length + 1);
+    if (artist && name.endsWith(` ${artist}`)) return name.slice(0, -(artist.length + 1));
+    return name;
 }
 
-function matchSoundCloudTrack(node, track, requester) {
+async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute } = {}) {
     const { info } = track;
     if (!info.title || !info.author || !(info.duration > 0) || info.isStream) return null;
     const title = recordingTitle(info);
     if (!title) return null;
-    return matchTrack(node, { ...info, title }, requester, candidate => {
+    const reference = { ...info, title };
+    const artist = normalized(info.author);
+    function sameRecording(alternate) {
+        const difference = Math.abs(alternate.duration - info.duration);
+        const credited = normalized(alternate.title);
+        const sameArtist = normalized(alternate.author) === artist;
+        return alternate.duration > 0 && recordingTitle({ ...alternate, author: info.author }) === title &&
+            (sameArtist ? difference <= 25000 : difference <= 5000 &&
+                (credited === `${title} ${artist}` || credited === `${artist} ${title}`));
+    }
+    const native = await matchTrack(node, reference, requester, candidate => {
         const { info: alternate } = candidate;
-        if (candidate.encoded && alternate.sourceName === "soundcloud" && !alternate.isStream &&
-            Math.abs(alternate.duration - info.duration) <= 25000 && recordingTitle(alternate) === title) return candidate;
+        if (candidate.encoded && alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate)) return candidate;
         return null;
     }, ["scsearch"]);
+    if (native || !binary || !resolve) return native;
+
+    // Lavalink can reject an entire search when a result uses an unsupported SoundCloud format.
+    const { stdout } = await exec(binary, [...ytDlpOptions, "--flat-playlist", "--dump-single-json", "--",
+        `scsearch6:${title} ${info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true });
+    for (const entry of JSON.parse(stdout).entries ?? []) {
+        const alternate = {
+            title: entry?.title,
+            author: entry?.artists?.[0] || entry?.uploader,
+            duration: Number(entry?.duration) * 1000,
+        };
+        if (!alternate.title || !alternate.author || streamProvider(entry.webpage_url) !== "soundcloud" ||
+            !sameRecording(alternate) || similarTrack({ info: alternate }, reference) < 6) continue;
+        const playable = await resolve(entry.webpage_url);
+        if (playable) return playable;
+    }
+    return null;
 }
 
 function streamProvider(input) {
@@ -167,7 +195,7 @@ function resolvedProviderTrack(track, input, provider, info) {
     return track;
 }
 
-async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo) {
+async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls) {
     const provider = binary && streamProvider(input);
     if (!provider) return null;
     const useKnownInfo = provider === "youtube" && knownInfo?.sourceName === "youtube" && knownInfo.uri === input && !knownInfo.isStream;
@@ -181,14 +209,23 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         const ready = resolvedProviderTrack(hosted, input, provider, knownInfo);
         if (ready) return ready;
     }
-    const { stdout } = await exec(binary, [...ytDlpOptions, "-q", "-f", "bestaudio[protocol=https]/best[protocol=https]", "--print",
-        '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j}',
+    const format = provider === "soundcloud"
+        ? "bestaudio[protocol^=m3u8][format_id!*=preview]/bestaudio[protocol=https][format_id!*=preview]"
+        : "bestaudio[protocol=https]/best[protocol=https]";
+    const { stdout } = await exec(binary, [...ytDlpOptions, "-q", "-f", format, "--print",
+        '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j,"protocol":%(protocol)j}',
         "--", input], { timeout: 40000, maxBuffer: 65536, windowsHide: true });
     const metadata = JSON.parse(stdout.trim());
     const resource = new URL(metadata.url);
-    const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com"];
+    const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com", "playback.media-streaming.soundcloud.cloud"];
     if (resource.protocol !== "https:" || resource.username || resource.password || resource.port ||
         !isSource(resource.hostname, mediaDomains)) return null;
+    const info = { title: metadata.title, author: metadata.author, identifier: metadata.id,
+        artworkUrl: metadata.artwork, duration: Number(metadata.duration) * 1000 };
+    if (provider === "soundcloud" && metadata.protocol?.startsWith("m3u8")) {
+        if (!resource.pathname.endsWith(".m3u8")) return null;
+        return resolvedProviderTrack(await loadHls?.(node, resource.href, requester), input, provider, info);
+    }
     // The URL YouTube issues to the bot may be bound to its IP. If the bot can
     // serve the audio, let Lavalink load it from the bot before trying that URL.
     let track = provider === "youtube" && !useKnownInfo && !knownInfo?.isStream
@@ -198,8 +235,7 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         track = result?.tracks?.[0];
     }
     if (!track && provider === "soundcloud") track = await fallback?.(node, input, requester, binary).catch(() => null);
-    return resolvedProviderTrack(track, input, provider, { title: metadata.title, author: metadata.author,
-        identifier: metadata.id, artworkUrl: metadata.artwork, duration: Number(metadata.duration) * 1000 });
+    return resolvedProviderTrack(track, input, provider, info);
 }
 
 function storeTrack(track) {

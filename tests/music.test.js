@@ -113,6 +113,25 @@ test("audio fallback serves private links and byte ranges for Lavalink seeking",
         return { tracks: [{ encoded: "cached-audio" }] };
     } }, "https://www.youtube.com/watch?v=abcdefghijk", { id: userId }, "yt-dlp");
     assert.deepEqual(result, { encoded: "cached-audio" });
+
+    const hls = "https://playback.media-streaming.soundcloud.cloud/track/playlist.m3u8";
+    const mp3 = Buffer.alloc(2048, 2);
+    media = createMediaCache(`http://127.0.0.1:${server.address().port}`, async (binary, args) => {
+        assert.equal(binary, "ffmpeg");
+        assert.equal(args[args.indexOf("-i") + 1], hls);
+        assert.deepEqual(args.slice(-3), ["-f", "mp3", "pipe:1"]);
+        return { stdout: mp3 };
+    });
+    const converted = await media.loadHls({ async search({ query }) {
+        assert.match(query, /\.mp3$/);
+        const response = await fetch(query, { headers: { Range: "bytes=0-99" } });
+        assert.equal(response.status, 206);
+        assert.equal(response.headers.get("content-type"), "audio/mpeg");
+        assert.deepEqual(Buffer.from(await response.arrayBuffer()), mp3.subarray(0, 100));
+        assert.equal((await fetch(query.replace(/\.mp3$/, ".m4a"))).status, 404);
+        return { tracks: [{ encoded: "converted-audio" }] };
+    } }, hls, { id: userId });
+    assert.deepEqual(converted, { encoded: "converted-audio" });
 });
 
 test("YouTube playback reuses search metadata and still supports direct streams without a cache", async () => {
@@ -176,6 +195,37 @@ test("SoundCloud fallback matches the recording and rejects remixes and differen
     } };
     assert.equal(await matchSoundCloudTrack(node, video, { id: userId }), song);
     assert.equal(await matchSoundCloudTrack({ search: async () => ({ tracks: [remix, cover] }) }, video, { id: userId }), null);
+});
+
+test("SoundCloud fallback searches independently and converts a full HLS match when native search fails", async () => {
+    const video = { info: { title: "Artist - Song (Official Video)", author: "Artist", duration: 239000 } };
+    const url = "https://soundcloud.com/uploader/song";
+    const hls = "https://playback.media-streaming.soundcloud.cloud/track/playlist.m3u8";
+    const requester = { id: userId };
+    const node = { async search() { throw new Error("Did not detect any supported formats"); } };
+    const ready = await matchSoundCloudTrack(node, video, requester, {
+        binary: "yt-dlp",
+        async exec(binary, args) {
+            assert.equal(binary, "yt-dlp");
+            assert.deepEqual(args.slice(-2), ["--", "scsearch6:song Artist"]);
+            return { stdout: JSON.stringify({ entries: [
+                { title: "Song", uploader: "Artist", duration: 171, webpage_url: "https://soundcloud.com/artist/short" },
+                { title: "Song (Remix)", uploader: "Artist", duration: 239, webpage_url: "https://soundcloud.com/artist/remix" },
+                { title: "Song - Artist", uploader: "Uploader", duration: 239, webpage_url: url },
+            ] }) };
+        },
+        resolve: publicUrl => directProviderTrack(node, publicUrl, requester, "yt-dlp", async (_, args) => {
+            assert.deepEqual(args.slice(-2), ["--", url]);
+            assert.match(args[args.indexOf("-f") + 1], /m3u8.*!\*=preview/);
+            return { stdout: JSON.stringify({ url: hls, protocol: "m3u8_native", title: "Song - Artist", duration: 239 }) };
+        }, undefined, undefined, async (...args) => {
+            assert.deepEqual(args, [node, hls, requester]);
+            return { encoded: "converted", info: { sourceName: "http" } };
+        }),
+    });
+    assert.equal(ready.encoded, "converted");
+    assert.equal(ready.info.sourceName, "soundcloud");
+    assert.equal(ready.info.uri, url);
 });
 
 function rawTrack(id, title) {
