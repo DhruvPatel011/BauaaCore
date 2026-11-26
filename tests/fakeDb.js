@@ -49,13 +49,15 @@ function createFakeDb() {
 
     function collection(name) {
         if (!collections.has(name)) {
-            collections.set(name, { docs: [], uniques: [] });
+            collections.set(name, { docs: [], uniques: [["_id"]] });
         }
 
         const store = collections.get(name);
 
         function checkUnique(candidate, ignore) {
             for (const fields of store.uniques) {
+                // MongoDB generates an _id when the caller omits one.
+                if (fields[0] === "_id" && candidate._id === undefined) continue;
                 const clash = store.docs.some(doc =>
                     doc !== ignore && fields.every(field => doc[field] === candidate[field])
                 );
