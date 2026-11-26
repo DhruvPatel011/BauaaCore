@@ -1,0 +1,71 @@
+server:
+  address: 127.0.0.1
+  port: 2333
+
+lavalink:
+  plugins:
+    - dependency: dev.lavalink.youtube:youtube-plugin:1.18.2
+    - dependency: com.github.topi314.lavasrc:lavasrc-plugin:4.8.3
+    - dependency: com.github.topi314.lavasearch:lavasearch-plugin:1.0.0
+    - dependency: com.github.topi314.sponsorblock:sponsorblock-plugin:3.0.1
+  server:
+    password: ${LAVALINK_PASSWORD}
+    sources:
+      youtube: false
+      soundcloud: true
+      bandcamp: true
+      twitch: true
+      vimeo: true
+      http: true
+      local: false
+      nico: false
+    youtubePlaylistLoadLimit: 5
+    playerUpdateInterval: 3
+    soundcloudFilterOutPreviewTracks: true
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: false
+    allowDirectPlaylistIds: false
+  lavasrc:
+    sources:
+      spotify: ${LAVASRC_SPOTIFY_ENABLED:false}
+      applemusic: ${LAVASRC_APPLE_MUSIC_ENABLED:false}
+      deezer: ${LAVASRC_DEEZER_ENABLED:false}
+      tidal: ${LAVASRC_TIDAL_ENABLED:false}
+      qobuz: ${LAVASRC_QOBUZ_ENABLED:false}
+      jiosaavn: ${LAVASRC_JIOSAAVN_ENABLED:false}
+      flowerytts: true
+    providers:
+      - 'ytsearch:"%ISRC%"'
+      - 'ytsearch:%QUERY%'
+      - 'scsearch:%QUERY%'
+    spotify:
+      clientId: ${SPOTIFY_CLIENT_ID:}
+      clientSecret: ${SPOTIFY_CLIENT_SECRET:}
+      countryCode: IN
+    applemusic:
+      mediaAPIToken: ${APPLE_MUSIC_TOKEN:}
+      countryCode: IN
+    deezer:
+      arl: ${DEEZER_ARL:}
+      masterDecryptionKey: ${DEEZER_MASTER_KEY:}
+    tidal:
+      token: ${TIDAL_TOKEN:}
+      countryCode: IN
+    qobuz:
+      userOauthToken: ${QOBUZ_USER_OAUTH_TOKEN:}
+    jiosaavn:
+      decryption:
+        secretKey: ${JIOSAAVN_SECRET_KEY:}
+    flowerytts:
+      voice: Airon
+      audioFormat: mp3
+
+logging:
+  level:
+    root: INFO
+  request:
+    enabled: false

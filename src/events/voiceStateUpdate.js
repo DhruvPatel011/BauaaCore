@@ -4,6 +4,7 @@ const { sendAllLog } = require("../utils/allLogger");
 const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { getDatabase } = require("../config/database");
 const { isIgnored } = require("../utils/ignoreManager");
+const { claimLogEvent } = require("../utils/logEvents");
 
 // ========================================
 // TIME HELPERS
@@ -103,6 +104,11 @@ module.exports = {
         if (!member || !member.user) return;
 
         const user = member.user;
+        const oldChannel = oldState.channel;
+        const newChannel = newState.channel;
+        const changedChannel = oldChannel?.id !== newChannel?.id;
+
+        if (user.bot && changedChannel) return;
 
                 // Suppress every supported voice log for ignored IDs
         if (await isIgnored(guild.id, user.id)) {
@@ -111,14 +117,16 @@ module.exports = {
         }
 
 
-        const oldChannel = oldState.channel;
-        const newChannel = newState.channel;
-
         // Database
         const sessions = getVoiceSessions();
 
         // Voice log channel
         const logChannel = await getLogChannel(guild, "voice");
+        if (changedChannel && (!oldChannel || !newChannel)) {
+            const voiceSession = (newChannel ? newState : oldState).sessionId;
+            const event = newChannel ? "voiceJoin" : "voiceLeave";
+            if (voiceSession && !(await claimLogEvent(guild.id, event, user.id, voiceSession))) return;
+        }
 
         const sessionKey = {
             guildId: guild.id,

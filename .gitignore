@@ -4,3 +4,7 @@ node_modules/
 !.env.example
 npm-debug.log
 npm-debug.log*
+music-node/Lavalink.jar
+music-node/yt-dlp.exe
+music-node/plugins/
+music-node/logs/

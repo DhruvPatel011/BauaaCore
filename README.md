@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <strong>A Discord bot for server activity logging, moderation visibility, and AI-powered conversations.</strong>
+  <strong>A Discord bot for server activity logging, moderation visibility, AI-powered conversations, and music playback in voice channels.</strong>
 </p>
 
 <p align="center">
@@ -25,6 +25,7 @@
   <a href="#screenshots">Screenshots</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#commands">Commands</a> ·
+  <a href="#music">Music</a> ·
   <a href="#getting-started">Installation</a>
 </p>
 
@@ -32,15 +33,16 @@
 
 ## About
 
-**BauaaCore** is a multifunctional Discord bot designed to simplify server management, activity monitoring, and AI-powered interactions.
+**BauaaCore** is a Discord bot for server management, activity monitoring, AI-powered conversations, and listening to music together.
 
-It brings three core capabilities together in one system:
+It brings four core capabilities together in one system:
 
 - **Server Logging** — Monitor important server activities through organized logging channels.
 - **Ignore Management** — Exclude selected users, bots, and webhooks from activity logging.
 - **AI Assistant** — Enable AI-powered conversations in configured Discord channels.
+- **Music** — Play supported tracks in voice, manage the queue, and save playlists.
 
-Built using Node.js, discord.js, MongoDB, and the Groq API.
+Built using Node.js, discord.js, MongoDB, the Groq API, and Lavalink.
 
 **Created and maintained by Bauaa.**
 
@@ -65,6 +67,8 @@ Supported events include:
 - Bot-related activity
 
 All logs are organized into dedicated Discord channels for easier monitoring and management.
+
+Bot voice joins, leaves, and moves are filtered automatically.
 
 ### 2. Ignore Management
 
@@ -97,6 +101,17 @@ Manage user-specific conversational memories stored in MongoDB.
 - Clear all saved memories.
 - Configured memory expiry: **180 days**.
 
+### 5. Music Playback
+
+Play music for everyone in a Discord voice channel and control it from a shared player card.
+
+- Queue music by song name, supported link, or audio upload. Public Spotify playlist links can queue tracks that have a playable match.
+- Pause, skip, replay, shuffle, loop, or vote to skip from the controller. Use `/nowplaying` to find the card again.
+- Save liked songs and personal playlists in MongoDB. Look up lyrics or send the current track details to your DMs.
+- Apply audio filters, configure a DJ role, and choose an announcement channel. Enable `/247` to keep the player connected while idle.
+
+See [music commands](#music) and [audio server setup](#run-the-music-server).
+
 ---
 
 ## Screenshots
@@ -125,7 +140,7 @@ The BauaaCore bot profile and its Discord identity.
 
 ## Architecture
 
-BauaaCore connects Discord events and slash commands with its application services, database, and AI provider.
+BauaaCore routes Discord events and slash commands to its logging, AI, and music services. The bot manages the queue and sends playback controls to Lavalink, which delivers audio to Discord voice channels.
 
 ### System Architecture
 
@@ -137,8 +152,9 @@ BauaaCore connects Discord events and slash commands with its application servic
 |---|---|
 | Node.js | Application runtime |
 | discord.js | Discord events and interactions |
-| MongoDB | Persistent configuration and AI memory |
+| MongoDB | Server settings, AI memory, saved playlists, and liked tracks |
 | Groq API | AI response generation |
+| Lavalink | Audio decoding, playback, and filters |
 | dotenv | Environment configuration |
 
 ---
@@ -213,6 +229,28 @@ These three commands are restricted to the Discord account configured in `BOT_OW
 
 Solo games are visible to the player who started them. A round expires after two minutes of inactivity, ten minutes total, or a bot restart.
 
+### Music
+
+Join a voice channel and run `/play query:<song name or URL>`. Once BauaaCore is playing, join its voice channel to add tracks or operate the controller. With track announcements enabled, BauaaCore edits the shared card for routine actions like pause and skip. Queue results, lyrics, and command errors appear privately. `/nowplaying` links to the shared controller when you can access it or shows a private card when needed.
+
+| Commands | What they do |
+|---|---|
+| `/play`, `/search`, `/playfile` | Queue a supported song or playlist, pick a search result, or play an uploaded file |
+| `/nowplaying`, `/connect`, `/disconnect` | Find the controller or manage the voice connection |
+| `/pause`, `/resume`, `/skip`, `/previous`, `/replay`, `/stop` | Control playback. `/stop` clears the queue. |
+| `/seek`, `/volume`, `/loop`, `/autoplay` | Set the playback position, volume, repeat mode, or recommendations |
+| `/queue`, `/history`, `/shuffle`, `/bump`, `/move track`, `/remove`, `/leavecleanup`, `/voteskip` | View, reorder, and clean up requests or vote to skip a track |
+| `/playlist create`, `/playlist import`, `/playlist savequeue`, `/playlist play` | Create, import, save, and play personal playlists |
+| `/like`, `/dislike`, `/showliked`, `/playliked` | Manage and play liked songs |
+| `/lyrics`, `/grab` | Look up lyrics or send track details to your DMs |
+| `/8d`, `/bassboost`, `/nightcore`, `/lofi`, `/resetfilter` | Apply or clear a player effect |
+| `/247`, `/dj`, `/restrictcommand`, `/announce`, `/buttons`, `/voicechannelstatus` | Configure server playback, permissions, and the player card |
+| `/sponsorblock`, `/forcefix`, `/switchaudionode`, `/debug` | Configure sponsor skipping, repair playback, or check the audio server |
+| `/spotify`, `/lastfm`, `/searchalbum`, `/searchartist`, `/searchplaylist` | Access optional account and catalog integrations |
+| `/music help` | List music commands |
+
+`/play` accepts YouTube videos and playlists, public Spotify links, and sources available on your Lavalink node. Public Spotify links use visible tracks from Spotify’s embed and match them to audio from another source. Private playlists, generated mixes, and tracks beyond the embed’s list may be unavailable. Playback depends on source availability and the audio node’s configuration.
+
 ### Command Interface
 
 Access BauaaCore's features directly through Discord's slash command interface.
@@ -227,8 +265,10 @@ Access BauaaCore's features directly through Discord's slash command interface.
 |---|---|
 | Node.js | JavaScript runtime |
 | discord.js v14 | Discord bot development |
-| MongoDB | Database and persistent memory |
+| MongoDB | Persistent settings, memory, and music library |
 | Groq API | AI integration |
+| Lavalink 4.2+ | Music playback and Discord voice transport |
+| yt-dlp | Optional audio resolver for supported sources |
 | dotenv | Environment variable management |
 
 ---
@@ -293,9 +333,49 @@ For current top-song requests in India without a different platform specified, Z
 npm start
 ```
 
+### Run the music server
+
+Configure these settings in `.env` to enable music.
+
+| Variable | Purpose |
+|---|---|
+| `LAVALINK_URL` | Origin of the audio node. Defaults to `http://127.0.0.1:2333`. |
+| `LAVALINK_PASSWORD` | A long random password shared by BauaaCore and Lavalink. |
+| `MUSIC_YTDLP_PATH` | Path to the optional `yt-dlp` executable on the bot host. Use `yt-dlp` if it is on `PATH`. |
+| `MUSIC_MEDIA_BASE_URL` | Optional bot HTTP origin reachable from Lavalink for audio fallback. Use `http://127.0.0.1:10000` for a native local node or `http://host.docker.internal:10000` for Docker Desktop with `PORT=10000`. |
+| `MUSIC_MEDIA_HOSTS` | Optional comma-separated hostnames for trusted public audio file URLs. |
+| `LAVALINK_URL_BACKUP`, `LAVALINK_PASSWORD_BACKUP` | Optional second audio node for `/switchaudionode`. |
+
+For YouTube audio resolution, install [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) and Node.js 22 or newer on the bot host. Run BauaaCore and Lavalink on the same internet connection because YouTube can bind stream URLs to the origin IP. The optional audio fallback uses up to 64 MiB of memory and accepts clips up to 16 MiB each.
+
+From the repository root, start the included node with Docker Compose.
+
+```bash
+docker compose --env-file .env -f music-node/compose.yaml up -d
+npm start
+```
+
+For a native Windows setup, install Java 17 or newer and place `Lavalink.jar` from the [Lavalink 4.2.2 release](https://github.com/lavalink-devs/Lavalink/releases/tag/4.2.2) in `music-node`. Run these PowerShell commands from the repository root after installing the bot dependencies.
+
+```powershell
+$env:LAVALINK_PASSWORD = node -p "require('dotenv').parse(require('node:fs').readFileSync('.env')).LAVALINK_PASSWORD"
+Set-Location music-node
+java -jar Lavalink.jar
+```
+
+Lavalink downloads its plugins at startup. Start the bot from the repository root in a separate terminal with `npm.cmd start`. Use `/debug` to check the audio node and `/playfile` with an MP3 to test playback. The bot needs View Channel, Connect, and Speak. Stage playback needs Stage moderator permissions. Announcements need Send Messages and Embed Links in the configured channel.
+
+For a hosted bot, set `LAVALINK_URL` to an audio node reachable via HTTP and WebSocket. The node needs access to the Discord voice gateway and outbound UDP. Both processes must stay online for `/247`.
+
+YouTube sponsor skipping uses community-submitted timestamps from [SponsorBlock](https://sponsor.ajay.app/).
+
+Public Spotify link playback needs no Spotify credentials. For Spotify account linking, set `MUSIC_ACCOUNT_SECRET`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_REDIRECT_URI`. Register `https://YOUR-BOT-HOST/music/spotify/callback` as the redirect URI in Spotify’s dashboard. Enable `LAVASRC_SPOTIFY_ENABLED=true` on the audio node for Spotify catalog search. Spotify’s app access rules apply, including its [Development Mode Premium requirement](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). Last.fm scrobbling needs `MUSIC_ACCOUNT_SECRET`, `LASTFM_API_KEY`, and `LASTFM_API_SECRET`, plus each listener’s opt-in. LRCLIB lyrics require no key. The optional Apple Music, Deezer, Tidal, Qobuz, and JioSaavn sources can be enabled with the settings in [the Lavalink configuration](music-node/application.yml) when you have the provider access those sources require.
+
 ### Render and uptime monitoring
 
 Set the environment variables in the Render web service settings. Use `npm ci` for the build command and `npm start` for the start command. Render provides `PORT`.
+
+Keep one BauaaCore instance connected per Discord bot token. Stop the hosted or local instance before starting the other with the same token.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
 

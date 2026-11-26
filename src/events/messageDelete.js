@@ -3,6 +3,7 @@ const { EmbedBuilder } = require("discord.js");
 const { sendAllLog } = require("../utils/allLogger");
 const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { isMessageIgnored } = require("../utils/ignoreManager");
+const { claimLogEvent } = require("../utils/logEvents");
 
 module.exports = {
     name: "messageDelete",
@@ -22,6 +23,7 @@ module.exports = {
             const logChannel = await getLogChannel(message.guild, "messages");
 
             if (!logChannel) return;
+            if (!(await claimLogEvent(message.guild.id, "messageDelete", message.id))) return;
 
             const user = message.author
                 ? `${message.author} \`${message.author.tag}\``

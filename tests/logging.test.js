@@ -15,7 +15,9 @@ require.cache[databasePath] = {
 const { getLogChannel, getLoggingStatus, setupLogging } = require("../src/utils/logger");
 const { shouldSkipIgnoredEvent } = require("../src/utils/ignoreManager");
 const { createHealthHandler } = require("../src/utils/health");
+const messageDelete = require("../src/events/messageDelete");
 const bulkDelete = require("../src/events/messageDeleteBulk");
+const voiceStateUpdate = require("../src/events/voiceStateUpdate");
 const ignore = require("../src/commands/ignore");
 const logsStatus = require("../src/commands/logsStatus");
 
@@ -169,7 +171,10 @@ test("bulk deletion skips ignored authors and webhooks while logging the remaini
     const messages = new Collection([[newId(), ignored], [newId(), webhook], [newId(), visible]]);
 
     assert.equal(await shouldSkipIgnoredEvent("messageDeleteBulk", [messages, source]), false);
-    await bulkDelete.execute(messages, source);
+    await Promise.all([
+        bulkDelete.execute(messages, source),
+        bulkDelete.execute(new Collection([...messages].reverse()), source),
+    ]);
     const details = channels.messages.sent[0].embeds[0].toJSON();
     const summary = channels.all.sent[0].embeds[0].toJSON();
     assert.match(details.description, /`1` messages/);
@@ -179,6 +184,55 @@ test("bulk deletion skips ignored authors and webhooks while logging the remaini
     await bulkDelete.execute(messages, source);
     assert.equal(channels.messages.sent.length, 1);
     assert.equal(channels.all.sent.length, 1);
+});
+
+test("duplicate delivery of a message deletion writes one log per destination", async () => {
+    const { guild, addChannel } = createGuild();
+    const channels = await setupLogging(guild);
+    const channel = addChannel("chat");
+    const message = { id: newId(), guild, channel, author: { id: newId(), tag: "Member" }, content: "Deleted text" };
+    await Promise.all([messageDelete.execute(message), messageDelete.execute({ ...message })]);
+    assert.equal(channels.messages.sent.length, 1);
+    assert.equal(channels.all.sent.length, 1);
+    await messageDelete.execute({ ...message, id: newId() });
+    assert.equal(channels.messages.sent.length, 2);
+    assert.equal(channels.all.sent.length, 2);
+});
+
+test("voice channel activity skips bots and logs a person's join and leave once per session", async () => {
+    const { guild, addChannel } = createGuild();
+    const logs = await setupLogging(guild);
+    const voice = addChannel("voice", { type: ChannelType.GuildVoice });
+    const otherVoice = addChannel("other-voice", { type: ChannelType.GuildVoice });
+    function member(bot) {
+        const id = newId();
+        return { user: { id, bot, tag: bot ? "Music Bot" : "Member", displayAvatarURL: () => "https://example.com/avatar.png" },
+            toString: () => `<@${id}>` };
+    }
+    const bot = member(true);
+    const botInVoice = { guild, member: bot, channel: voice, sessionId: "bot-session" };
+    const botOutOfVoice = { ...botInVoice, channel: null };
+    const botMoved = { ...botInVoice, channel: otherVoice };
+    await voiceStateUpdate.execute(botOutOfVoice, botInVoice);
+    await voiceStateUpdate.execute(botInVoice, botMoved);
+    await voiceStateUpdate.execute(botMoved, botOutOfVoice);
+    assert.equal(logs.voice.sent.length, 0);
+    assert.equal(logs.all.sent.length, 0);
+    assert.equal(await db.collection("voice_sessions").findOne({ guildId: guild.id, userId: bot.user.id }), null);
+
+    const human = member(false);
+    for (const sessionId of ["first-session", "second-session"]) {
+        const joined = { guild, member: human, channel: voice, sessionId };
+        const left = { ...joined, channel: null };
+        await Promise.all([voiceStateUpdate.execute(left, joined), voiceStateUpdate.execute(left, joined)]);
+        await Promise.all([voiceStateUpdate.execute(joined, left), voiceStateUpdate.execute(joined, left)]);
+    }
+    const summaries = logs.voice.sent.map(item => item.embeds[0].toJSON());
+    assert.deepEqual(summaries.map(log => log.title), [
+        "🟢 Voice Channel Joined", "🔴 Voice Channel Left", "🟢 Voice Channel Joined", "🔴 Voice Channel Left",
+    ]);
+    for (const log of summaries.filter(item => item.title.includes("Left"))) assert.match(log.description, /Duration\*\*\n\d+s/);
+    assert.equal(logs.all.sent.length, 4);
 });
 
 test("logging rechecks a destination if its permissions change during an audit lookup", async () => {

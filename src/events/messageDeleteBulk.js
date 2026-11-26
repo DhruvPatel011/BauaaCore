@@ -7,6 +7,7 @@ const {
 const { sendAllLog } = require("../utils/allLogger");
 const { getLogChannel, sendConfiguredLog } = require("../utils/logger");
 const { isMessageIgnored } = require("../utils/ignoreManager");
+const { claimLogEvent } = require("../utils/logEvents");
 
 module.exports = {
     name: "messageDeleteBulk",
@@ -45,6 +46,7 @@ module.exports = {
                 console.log("❌ deleted-msg-logs channel not found");
                 return;
             }
+            if (!(await claimLogEvent(guild.id, "messageDeleteBulk", channel.id, ...[...messages.keys()].sort()))) return;
 
             // Find bulk delete executor
             let executor = "Unknown / Audit Log unavailable";

@@ -26,6 +26,7 @@ async function connectDatabase() {
         { guildId: 1, id: 1 },
         { unique: true }
     );
+    await database.collection("logged_events").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
     console.log(`✅ MongoDB connected | Database: ${database.databaseName}`);
     return database;

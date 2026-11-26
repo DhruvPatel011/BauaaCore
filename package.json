@@ -19,6 +19,7 @@
     "discord.js": "^14.27.0",
     "dotenv": "^18.0.6",
     "groq-sdk": "^1.6.0",
+    "lavalink-client": "^2.11.2",
     "mongodb": "^6.20.0"
   }
 }

@@ -8,6 +8,7 @@ const {
     GatewayIntentBits,
     Collection,
     Partials,
+    RESTJSONErrorCodes,
 } = require("discord.js");
 
 // ========================================
@@ -30,6 +31,7 @@ const setupLogsCommand = require("./commands/setupLogs");
 const logsStatusCommand = require("./commands/logsStatus");
 const ignoreCommand = require("./commands/ignore");
 const gameCommand = require("./commands/game");
+const { installMusic } = require("./music/commands");
 
 // AI commands
 const aiSetupCommand = require("./commands/aiSetup");
@@ -108,6 +110,7 @@ const client = new Client({
 // ========================================
 
 client.commands = new Collection();
+const music = installMusic(client);
 
 const commands = [
     // Existing commands
@@ -115,6 +118,7 @@ const commands = [
     logsStatusCommand,
     ignoreCommand,
     gameCommand,
+    ...music.commands,
 
     // AI commands
     aiSetupCommand,
@@ -218,6 +222,11 @@ registerEvent(
 
 client.on("messageCreate", async (message) => {
     try {
+        if (await music.message(message)) return;
+    } catch (error) {
+        console.warn("Music text command failed:", error?.code || error?.name);
+    }
+    try {
         await messageCreateEvent.execute(message);
     } catch (error) {
         console.error("❌ AI Message Event Error:", error);
@@ -320,7 +329,10 @@ registerEvent(
 // 🌐 HTTP HEALTH SERVER
 // ========================================
 
-const server = http.createServer(createHealthHandler(client));
+const health = createHealthHandler(client);
+const server = http.createServer((req, res) => {
+    if (!music.handleHttp(req, res)) health(req, res);
+});
 
 // ========================================
 // 🚨 HTTP SERVER ERROR HANDLING
@@ -390,6 +402,7 @@ client.on("warn", (message) => {
 // ========================================
 
 client.once("clientReady", async () => {
+    void Promise.resolve(music.start()).catch(error => console.warn("Music node startup failed:", error?.code || error?.name));
     console.log("");
     console.log("╔══════════════════════════════════════╗");
     console.log("║          🤖 BAUAACORE BOT            ║");
@@ -430,6 +443,9 @@ client.once("clientReady", async () => {
 
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
+        if (interaction.isButton() || interaction.isStringSelectMenu()) {
+            await music.component(interaction).catch(error => console.warn("Music interaction failed:", error?.code || error?.name));
+        }
         return;
     }
 
@@ -449,9 +465,13 @@ client.on("interactionCreate", async (interaction) => {
         await command.execute(interaction);
 
     } catch (error) {
+        if (error?.code === RESTJSONErrorCodes.InteractionHasAlreadyBeenAcknowledged) {
+            console.warn(`Interaction already acknowledged: /${interaction.commandName}. Check for another BauaaCore instance using this bot token.`);
+            return;
+        }
         console.error(
             `❌ Command Execution Error: /${interaction.commandName}`,
-            error
+            error?.code || error?.name
         );
 
         try {
@@ -469,7 +489,7 @@ client.on("interactionCreate", async (interaction) => {
         } catch (replyError) {
             console.error(
                 "❌ Interaction Reply Error:",
-                replyError
+                replyError?.code || replyError?.name
             );
         }
     }
@@ -515,6 +535,8 @@ async function shutdown(signal) {
     console.log(`║  📡 Signal : ${signal}`);
     console.log("║  🔄 Closing connections...");
     console.log("╚══════════════════════════════════════╝");
+
+    await music.close()?.catch(error => console.warn("Music shutdown failed:", error?.code || error?.name));
 
     // Disconnect Discord
     client.destroy();

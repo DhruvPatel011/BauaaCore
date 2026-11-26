@@ -1,0 +1,29 @@
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4.2.2
+    restart: unless-stopped
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:?Set LAVALINK_PASSWORD in .env}
+      LAVASRC_SPOTIFY_ENABLED: ${LAVASRC_SPOTIFY_ENABLED:-false}
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      LAVASRC_APPLE_MUSIC_ENABLED: ${LAVASRC_APPLE_MUSIC_ENABLED:-false}
+      APPLE_MUSIC_TOKEN: ${APPLE_MUSIC_TOKEN:-}
+      LAVASRC_DEEZER_ENABLED: ${LAVASRC_DEEZER_ENABLED:-false}
+      DEEZER_ARL: ${DEEZER_ARL:-}
+      DEEZER_MASTER_KEY: ${DEEZER_MASTER_KEY:-}
+      LAVASRC_TIDAL_ENABLED: ${LAVASRC_TIDAL_ENABLED:-false}
+      TIDAL_TOKEN: ${TIDAL_TOKEN:-}
+      LAVASRC_QOBUZ_ENABLED: ${LAVASRC_QOBUZ_ENABLED:-false}
+      QOBUZ_USER_OAUTH_TOKEN: ${QOBUZ_USER_OAUTH_TOKEN:-}
+      LAVASRC_JIOSAAVN_ENABLED: ${LAVASRC_JIOSAAVN_ENABLED:-false}
+      JIOSAAVN_SECRET_KEY: ${JIOSAAVN_SECRET_KEY:-}
+    ports:
+      - "127.0.0.1:2333:2333"
+    volumes:
+      - ./application.yml:/opt/Lavalink/application.yml:ro
+      - music-plugins:/opt/Lavalink/plugins
+
+volumes:
+  music-plugins:
