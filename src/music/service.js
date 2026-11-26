@@ -4,7 +4,7 @@ const { ChannelType, PermissionFlagsBits, Routes } = require("discord.js");
 const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalink-client");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
-const { customHosts, matchTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
+const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
 const { MusicError, TRACK_LIMIT, noMentions, trackTitle } = require("./shared");
 const { playerPanel, disconnectedPanel } = require("./panel");
 const filters = require("./filters");
@@ -59,7 +59,6 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
     const mediaHosts = customHosts(env);
     const extractor = env.MUSIC_YTDLP_PATH?.trim();
     const media = createMediaCache(env.MUSIC_MEDIA_BASE_URL);
-    const providerTrack = (node, url, requester) => directProviderTrack(node, url, requester, extractor, undefined, media.load);
     const controls = new Map();
     const messages = new Map();
     const panels = new Map();
@@ -85,6 +84,25 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
 
     function warn(event, error) {
         console.warn(`[Music] ${event}`, error?.code || error?.name || "failed");
+    }
+
+    async function providerTrack(node, url, requester) {
+        const provider = streamProvider(url);
+        try {
+            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load);
+            if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
+            return track;
+        } catch (error) {
+            const output = typeof error.stderr === "string" ? error.stderr : "";
+            const status = /\bHTTP Error (\d{3})\b/i.exec(output)?.[1];
+            const detail = /sign in|login required/i.test(output) ? "upstream requested sign-in"
+                : error.killed ? "audio resolution timed out"
+                : status ? `upstream returned HTTP ${status}`
+                : /requested format is not available/i.test(output) ? "no supported audio format returned"
+                : "audio resolution failed";
+            warn(`yt-dlp ${provider}: ${detail}`, error);
+            return null;
+        }
     }
 
     function playerFor(guildId) {
@@ -197,12 +215,12 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
         } catch (error) {
             if (!extractor || !streamProvider(query)) throw error;
         }
-        const track = await providerTrack(node, query, requester).catch(() => null);
+        const track = await providerTrack(node, query, requester);
         if (!track) throw new MusicError("No playable audio found for that link. Try another track or `/playfile`.");
         return { tracks: [track] };
     }
 
-    function unresolved(reference, userId, candidate = null) {
+    function unresolved(reference, userId, candidate = null, allowAlternateSource = false) {
         const requester = { id: userId };
         const track = manager.utils.buildUnresolvedTrack({ info: { ...reference,
             sourceName: reference.source, isSeekable: true } }, requester);
@@ -212,13 +230,21 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
             if (reference.kind === "match") {
                 result = await matchTrack(player.node, reference, requester, extractor ? candidate => {
                     if (!streamProvider(candidate.info.uri)) return candidate;
-                    return providerTrack(player.node, candidate.info.uri, requester).catch(() => null);
+                    return providerTrack(player.node, candidate.info.uri, requester);
                 } : undefined);
             } else {
                 const uri = result?.info.uri || reference.url;
                 if (extractor && streamProvider(uri)) {
-                    const playable = await providerTrack(player.node, uri, requester).catch(() => null);
+                    const playable = await providerTrack(player.node, uri, requester);
                     if (playable) result = playable;
+                    else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
+                        player.node.info?.sourceManagers?.includes("soundcloud")) {
+                        const alternate = await matchSoundCloudTrack(player.node, result, requester);
+                        if (alternate) {
+                            result = alternate;
+                            console.info("[Music] Using a matched SoundCloud track after YouTube audio resolution failed");
+                        }
+                    }
                 }
                 if (!result) result = (await searchTracks(player.node, reference.url, requester, { mediaHosts }).catch(() => null))?.tracks?.[0];
             }
@@ -237,7 +263,7 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
         return track;
     }
 
-    async function enqueue(interaction, ctx, tracks, { stored = false, first = false } = {}) {
+    async function enqueue(interaction, ctx, tracks, { stored = false, first = false, allowAlternateSource = false } = {}) {
         if (!tracks.length) throw new MusicError("No playable tracks found.");
         const capacity = TRACK_LIMIT - (ctx.player?.queue.tracks.length || 0);
         if (capacity <= 0) throw new MusicError(`The queue is full (${TRACK_LIMIT} upcoming tracks).`);
@@ -246,7 +272,7 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
         const queued = tracks.slice(0, capacity).map(track => {
             if (stored) return unresolved(track, ctx.userId);
             if (extractor && !track.userData?.musicExtracted && streamProvider(track.info.uri)) {
-                return unresolved(storeTrack(track), ctx.userId, track);
+                return unresolved(storeTrack(track), ctx.userId, track, allowAlternateSource);
             }
             return track;
         });

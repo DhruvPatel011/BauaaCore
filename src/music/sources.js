@@ -112,8 +112,8 @@ function similarTrack(track, reference) {
     return titleMatch + authorMatch + (gap > 25000 ? -5 : gap > 5000 ? -2 : 1) - (track.info.isStream ? 6 : 0);
 }
 
-async function matchTrack(node, reference, requester, resolve = track => track) {
-    for (const source of searchSources) {
+async function matchTrack(node, reference, requester, resolve = track => track, sources = searchSources) {
+    for (const source of sources) {
         const results = await node.search({ query: `${reference.title} ${reference.author}`, source }, requester).catch(() => null);
         const ranked = (results?.tracks || []).map(track => ({ track, score: similarTrack(track, reference) }))
             .sort((left, right) => right.score - left.score);
@@ -124,6 +124,25 @@ async function matchTrack(node, reference, requester, resolve = track => track) 
         }
     }
     return null;
+}
+
+function recordingTitle({ title, author }) {
+    const name = normalized(title.split("|", 1)[0].replace(/\s*\((?:official (?:music )?video|official audio|lyrics?)\)\s*$/i, ""));
+    const artist = normalized(author);
+    return artist && name.startsWith(`${artist} `) ? name.slice(artist.length + 1) : name;
+}
+
+function matchSoundCloudTrack(node, track, requester) {
+    const { info } = track;
+    if (!info.title || !info.author || !(info.duration > 0) || info.isStream) return null;
+    const title = recordingTitle(info);
+    if (!title) return null;
+    return matchTrack(node, { ...info, title }, requester, candidate => {
+        const { info: alternate } = candidate;
+        if (candidate.encoded && alternate.sourceName === "soundcloud" && !alternate.isStream &&
+            Math.abs(alternate.duration - info.duration) <= 25000 && recordingTitle(alternate) === title) return candidate;
+        return null;
+    }, ["scsearch"]);
 }
 
 function streamProvider(input) {
@@ -213,4 +232,5 @@ async function searchTracks(node, input, requester, options = {}) {
     return { tracks: (result.tracks || []).slice(0, TRACK_LIMIT), name: result.playlist?.title, playlist: result.loadType === "playlist" };
 }
 
-module.exports = { checkedQuery, customHosts, parseSpotifyEmbed, spotifyItem, matchTrack, storeTrack, searchTracks, streamProvider, directProviderTrack };
+module.exports = { checkedQuery, customHosts, parseSpotifyEmbed, spotifyItem, matchTrack, matchSoundCloudTrack,
+    storeTrack, searchTracks, streamProvider, directProviderTrack };

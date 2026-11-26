@@ -77,7 +77,8 @@ async function playInput(music, interaction, command, options) {
         return searchPanel(matches, music.select(interaction, matches));
     }
     const tracks = result.selection ? result.tracks.slice(0, 1) : result.tracks;
-    const added = await music.enqueue(interaction, ctx, tracks, { stored: result.matched, first: options.first });
+    const added = await music.enqueue(interaction, ctx, tracks, { stored: result.matched, first: options.first,
+        allowAlternateSource: command === "play" && result.selection });
     return tracks.length === 1 ? `Queued **${result.matched ? musicText(tracks[0].title) : trackTitle(tracks[0])}**.` : queued(added, result.name);
 }
 
