@@ -3,11 +3,6 @@ server:
   port: 2333
 
 lavalink:
-  plugins:
-    - dependency: dev.lavalink.youtube:youtube-plugin:1.18.2
-    - dependency: com.github.topi314.lavasrc:lavasrc-plugin:4.8.3
-    - dependency: com.github.topi314.lavasearch:lavasearch-plugin:1.0.0
-    - dependency: com.github.topi314.sponsorblock:sponsorblock-plugin:3.0.1
   server:
     password: ${LAVALINK_PASSWORD}
     sources:
@@ -70,3 +65,16 @@ logging:
     root: INFO
   request:
     enabled: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: "!render"
+
+lavalink:
+  plugins:
+    - dependency: dev.lavalink.youtube:youtube-plugin:1.18.2
+    - dependency: com.github.topi314.lavasrc:lavasrc-plugin:4.8.3
+    - dependency: com.github.topi314.lavasearch:lavasearch-plugin:1.0.0
+    - dependency: com.github.topi314.sponsorblock:sponsorblock-plugin:3.0.1

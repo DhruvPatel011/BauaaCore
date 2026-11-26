@@ -473,7 +473,10 @@ function createMusic(client, { env = process.env, data = library() } = {}) {
     });
 
     if (manager) {
-        manager.nodeManager.on("error", (node, error) => warn(`node ${node.id}`, error));
+        manager.nodeManager.on("error", (node, error) => {
+            const status = /^Unexpected server response: (\d{3})$/.exec(error?.message)?.[1];
+            warn(`node ${node.id}${status ? ` WebSocket HTTP ${status}` : ""}`, error);
+        });
         manager.nodeManager.on("connect", node => console.log(`[Music] Lavalink ${node.id} connected`));
         manager.on("trackStart", player => {
             player.deleteData("votes");
