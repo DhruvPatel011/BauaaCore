@@ -130,9 +130,10 @@ test("moods: all 10 exist, are distinct, and change the prompt + temperature", (
 
 test("moods: sharp responses use banter without harassment or threats", () => {
     const toxic = buildSystemPrompt("very_toxic", { conversationType: "banter" });
-    assert.match(toxic, /Avoid cruelty, harassment, discriminatory abuse, and threats/);
-    assert.match(toxic, /when someone swears at you or Bauaa, or invites a roast/);
-    assert.match(toxic, /Match their level of profanity/);
+    assert.match(toxic, /Avoid genuine cruelty, sustained harassment, discriminatory abuse, threats/);
+    assert.match(toxic, /even when the sender has not sworn first/);
+    assert.match(toxic, /one sharp, profane punchline with a reaction emoji and no questions/);
+    assert.doesNotMatch(toxic, /Add a follow-up question|Match the joke or energy with a short line/);
     assert.match(buildSystemPrompt("savage"), /teasing only in mutual banter/);
 });
 
@@ -870,16 +871,16 @@ test("handler: affection and direct jabs sound short and distinct across moods",
     const romantic = makeMessage({ content: "I love you babe" });
     await messageCreate.execute(romantic);
     await waitIdle();
-    assert.deepEqual(romantic.replies, ["Aww, itne cute kab se ho?"]);
-    assert.match(requests[0].messages[0].content, /STYLE FOR THIS MESSAGE: Give one warm, playful reaction/);
+    assert.deepEqual(romantic.replies, ["Tumhari ye baat seedha dil pe lagi 🤍"]);
+    assert.match(requests[0].messages[0].content, /STYLE FOR THIS MESSAGE: Give one expressive romantic line/);
     assert.match(requests[0].messages[0].content, /SERVER MOOD: Romantic/);
 
     await configManager.setAIMood(G1, "very_toxic");
     const jab = makeMessage({ content: "Bauaa chutiya hain" });
     await messageCreate.execute(jab);
     await waitIdle();
-    assert.deepEqual(jab.replies, ["Bauaa pe bakchodi se point prove nahi hota."]);
-    assert.match(requests[1].messages[0].content, /STYLE FOR THIS MESSAGE: Give one short, direct reaction/);
+    assert.deepEqual(jab.replies, ["Bauaa pe bakchodi ka punchline bhi loading pe atka hai 🤡"]);
+    assert.match(requests[1].messages[0].content, /STYLE FOR THIS MESSAGE: Deliver one sharp, profane punchline/);
     assert.match(requests[1].messages[0].content, /SERVER MOOD: Very Toxic/);
     assert.equal(requests[1].max_completion_tokens, 350);
 
@@ -888,6 +889,37 @@ test("handler: affection and direct jabs sound short and distinct across moods",
     await waitIdle();
     assert.deepEqual(dismissed.replies, ["Theek hai."]);
     assert.equal(requests.length, 2, "a dismissal needs no Groq request");
+});
+
+test("handler: Very Toxic drops casual replies and questions, keeps one roast, and respects the selected language", async () => {
+    await setupGuild("very_toxic");
+    const modelReplies = [
+        "Theek hai bhai 😏\nYe bakchodi kahan se seekhi? 😏",
+        "Kya bolu? Tera logic full bakchodi hai. 💀\nAur kuch?",
+        "આપ કેમ છો? 🤡",
+        "Ye kaafi mushkil lag raha hai.",
+    ];
+    const prompts = [];
+    mockCreate(async body => {
+        prompts.push(body.messages[0].content);
+        return streamOf([modelReplies.shift()]);
+    });
+
+    for (const [content, expected] of [
+        ["Ohh achha", "Itni bakchodi aur punchline abhi bhi loading pe hai 💀"],
+        ["No way", "Tera logic full bakchodi hai. 💀"],
+        ["Vo noob hain, Gujarati ma jawab aapo.", "આટલી બકચોદી પછીય જોક હજી લોડ થાય છે 💀"],
+        ["I'm feeling hopeless", "Ye kaafi mushkil lag raha hai."],
+    ]) {
+        const message = makeMessage({ content });
+        await messageCreate.execute(message);
+        await waitIdle();
+        assert.deepEqual(message.replies, [expected]);
+        assert.equal(conversations.getConversation(G1, U1).at(-1).parts[0].text, expected);
+    }
+
+    assert.match(prompts[2], /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in natural Gujarati/);
+    assert.match(prompts[3], /Respond calmly to genuine distress/);
 });
 
 test("handler: keeps a complete short reaction and skips the rest of a long social reply", async () => {
@@ -899,6 +931,27 @@ test("handler: keeps a complete short reaction and skips the rest of a long soci
     await waitIdle();
     assert.deepEqual(message.replies, ["Aww, tum bhi sweet ho."]);
     assert.equal(conversations.getConversation(G1, U1).at(-1).parts[0].text, "Aww, tum bhi sweet ho.");
+});
+
+test("handler: Romantic carries mature flirtation guidance to longer replies", async () => {
+    await setupGuild("romantic");
+    let prompt;
+    const reply = "Let the candles burn a little longer. The rest can stay between the two of us. 🌙";
+    mockCreate(async body => {
+        prompt = body.messages[0].content;
+        return streamOf([reply]);
+    });
+
+    const message = makeMessage({ content: "Set a slow-burn candlelit scene for two adults. Reply in English." });
+    await messageCreate.execute(message);
+    await waitIdle();
+
+    assert.deepEqual(message.replies, [reply]);
+    assert.match(prompt, /Romantic mode permits welcome flirtation and non-graphic innuendo/);
+    assert.match(prompt, /suggestive wordplay/);
+    assert.match(prompt, /Fade to black before graphic sexual details/);
+    assert.match(prompt, /Use neutral, non-flirtatious language if the sender is under 18/);
+    assert.match(prompt, /RESPONSE LANGUAGE FOR THIS MESSAGE: Reply in clear, natural English/);
 });
 
 test("handler: all ten server moods reach Groq with their own voice and temperature", async () => {

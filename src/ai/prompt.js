@@ -1,6 +1,6 @@
 "use strict";
 
-const { MOODS } = require("./aiConfig");
+const { MOODS, usesRoastReply } = require("./aiConfig");
 const { redactPrivateData } = require("./contentFilters");
 const { resolveLanguage } = require("./languageDetector");
 const {
@@ -10,6 +10,7 @@ const {
     BAUAA_RULES,
     LANGUAGE_RULES,
     RESPONSE_RULES,
+    ROAST_RESPONSE_RULES,
     LENGTH_GUIDANCE,
 } = require("./behaviorRules");
 
@@ -43,14 +44,19 @@ function buildSystemPrompt(mood = "default", options = {}) {
     } = options || {};
 
     const selectedMood = Object.hasOwn(MOODS, mood) ? MOODS[mood] : MOODS.default;
+    const notes = Array.isArray(appNotes) ? appNotes : [];
+    const roast = usesRoastReply(mood, conversationType, notes);
+    const moodDirective = roast
+        ? "Apply this mood in the selected response language. Maintain accuracy, relevance, and privacy."
+        : "Apply this mood in the selected response language. Maintain accuracy, relevance, respect and privacy.";
     const sections = [
         INTRO,
         PRIORITY_STATEMENT,
         GLOBAL_RULES,
         BAUAA_RULES,
         LANGUAGE_RULES,
-        RESPONSE_RULES,
-        `SERVER MOOD: ${selectedMood.label}\n${selectedMood.prompt}\nApply this mood in the selected response language. Maintain accuracy, relevance, respect and privacy.`,
+        roast ? ROAST_RESPONSE_RULES : RESPONSE_RULES,
+        `SERVER MOOD: ${selectedMood.label}\n${selectedMood.prompt}\n${moodDirective}`,
     ];
 
     const custom = neutralize(customInstructions);
@@ -81,9 +87,17 @@ function buildSystemPrompt(mood = "default", options = {}) {
     if (bauaaMentioned) {
         turn.push("BAUAA MENTIONED: The sender named or tagged Bauaa. Take a supportive stance and defend him if the message is disrespectful.");
     }
-    if (LENGTH_GUIDANCE[conversationType]) turn.push(`STYLE FOR THIS MESSAGE: ${LENGTH_GUIDANCE[conversationType]}`);
+    if (roast) {
+        turn.push("STYLE FOR THIS MESSAGE: Deliver one sharp, profane punchline with a reaction emoji and no questions.");
+    } else if (mood === "very_toxic" && conversationType === "emotional") {
+        turn.push("STYLE FOR THIS MESSAGE: Respond calmly to genuine distress. Use a roast only if the sender is clearly joking.");
+    } else if (mood === "romantic" && conversationType === "affection") {
+        turn.push("STYLE FOR THIS MESSAGE: Give one expressive romantic line tied to what they said. Match the moment with sincere affection, a teasing flirt, or a little slow-burn tension when welcome.");
+    } else if (LENGTH_GUIDANCE[conversationType]) {
+        turn.push(`STYLE FOR THIS MESSAGE: ${LENGTH_GUIDANCE[conversationType]}`);
+    }
 
-    for (const note of Array.isArray(appNotes) ? appNotes : []) {
+    for (const note of notes) {
         const cleaned = neutralize(note);
         if (cleaned) turn.push(`APPLICATION NOTE: ${cleaned}`);
     }

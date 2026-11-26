@@ -3,7 +3,7 @@
 const { PermissionFlagsBits } = require("discord.js");
 
 const { peekAIConfig } = require("../ai/aiConfigManager");
-const { getRuntimeSettings, MOODS } = require("../ai/aiConfig");
+const { getRuntimeSettings, MOODS, usesRoastReply } = require("../ai/aiConfig");
 const {
     getConversation, getConversationLanguage, saveConversation, setConversationLanguage,
 } = require("../ai/conversationManager");
@@ -225,9 +225,10 @@ async function processAIMessage({
 
         if (superseded()) return;
 
-        const shortChat = SHORT_CHAT_TYPES.has(context.conversationType);
+        const roast = usesRoastReply(config.mood, context.conversationType, appNotes);
+        const shortChat = roast || SHORT_CHAT_TYPES.has(context.conversationType);
         const shortOptions = {
-            type: context.conversationType, language: language.key, mood: config.mood, bauaaMentioned,
+            type: context.conversationType, language: language.key, mood: config.mood, bauaaMentioned, roast,
         };
         if (context.conversationType === "dismissal") {
             const response = formatShortChatReply("", shortOptions);

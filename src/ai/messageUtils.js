@@ -5,60 +5,70 @@ const DISCORD_SAFE_LENGTH = 1900;
 const SHORT_CHAT_TYPES = new Set(["greeting", "affection", "provocation", "dismissal"]);
 const ASSISTANT_SCRIPT =
     /\b(?:as an ai|i(?:'m| am) here to (?:help|assist)|i(?:'m| am) (?:just )?an ai|feel free to ask|how can i (?:help|assist)|main (?:ek )?ai|madad ke liye|madad karne ke liye|aapki baat kaafi sweet lag rahi hai|bauaa ka naam (?:aapne|tumne)|mujhe lagta hai (?:aap|tum).*?upset)\b|मैं (?:एक )?(?:एआई|ai) हूँ|मदद के लिए|હું (?:એક )?(?:એઆઈ|ai) છું|મદદ માટે/iu;
+const ROAST_PROFANITY =
+    /(?<![\p{L}\p{M}])(?:bullshit|shit(?:ty)?|fuck(?:ing)?|damn|crap|bakchod(?:i)?|chutiyapa|gaand|बकचोद(?:ी)?|चूतियापा|चुतियापा|गांड|બકચોદ(?:ી)?|ચૂતીયાપો|ગાંડ)(?![\p{L}\p{M}])/iu;
+const ROAST_END = /\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?$/u;
 const SHORT_CHAT_FALLBACKS = {
     hinglish: {
         greeting: "Hey, kya haal?",
         affection: "Aww, ye sweet tha.",
-        romantic: "Aww, itne cute kab se ho?",
+        romantic: "Tumhari ye baat seedha dil pe lagi 🤍",
         provocation: "Point hai toh seedha bol.",
         owner: "Bauaa pe gaali dene se point strong nahi hota.",
-        toxicOwner: "Bauaa pe bakchodi se point prove nahi hota.",
+        roast: "Itni bakchodi aur punchline abhi bhi loading pe hai 💀",
+        toxicOwner: "Bauaa pe bakchodi ka punchline bhi loading pe atka hai 🤡",
         dismissal: "Theek hai.",
     },
     english: {
         greeting: "Hey!",
         affection: "Aw, that was sweet.",
-        romantic: "Aw, look at you being all cute.",
+        romantic: "That went straight to my heart 🤍",
         provocation: "Got a point? Make it.",
         owner: "Insulting Bauaa doesn't make your point.",
-        toxicOwner: "Talking shit about Bauaa doesn't prove a thing.",
+        roast: "That's a whole lot of bullshit for zero punchline 💀",
+        toxicOwner: "All that shit about Bauaa and the punchline still missed 🤡",
         dismissal: "Alright.",
     },
     hindi: {
         greeting: "अरे, कैसे हो?",
         affection: "ये सुनकर अच्छा लगा।",
-        romantic: "अरे, आज इतने प्यारे कैसे लग रहे हो?",
+        romantic: "तुम्हारी ये बात सीधे दिल को छू गई 🤍",
         provocation: "कोई बात है तो सीधे बोलो।",
         owner: "बाउआ को गाली देने से तुम्हारी बात सही नहीं हो जाती।",
-        toxicOwner: "बाउआ पर बकवास करने से कुछ साबित नहीं होता।",
+        roast: "इतनी बकचोदी और मज़ाक अब भी लोड हो रहा है 💀",
+        toxicOwner: "बाउआ पर इतनी बकचोदी और तंज़ भी निशाने से बाहर 🤡",
         dismissal: "ठीक है।",
     },
     gujarati: {
         greeting: "અરે, કેમ છો?",
         affection: "આ સાંભળીને મજા આવી.",
-        romantic: "અરે, આજે આટલા મીઠા કેમ?",
+        romantic: "તારી આ વાત સીધી દિલને અડી ગઈ 🤍",
         provocation: "કંઈ કહેવું હોય તો સીધું કહો.",
         owner: "બાઉઆને ગાળો આપવાથી તમારી વાત સાચી નથી થઈ જતી.",
-        toxicOwner: "બાઉઆ વિશે બકવાસ કરવાથી કંઈ સાબિત નથી થતું.",
+        roast: "આટલી બકચોદી પછીય જોક હજી લોડ થાય છે 💀",
+        toxicOwner: "બાઉઆ પર આટલી બકચોદી ને ટોણોય નિશાન ચૂકી ગયો 🤡",
         dismissal: "ઠીક છે.",
     },
 };
 
-function formatShortChatReply(response, { type, language, mood, bauaaMentioned }) {
+function formatShortChatReply(response, { type, language, mood, bauaaMentioned, roast = false }) {
     const replies = SHORT_CHAT_FALLBACKS[language] || SHORT_CHAT_FALLBACKS.hinglish;
     if (type === "dismissal") return replies.dismissal;
 
     // Keep a complete conversational line and drop support-script filler.
-    const line = String(response ?? "").split(/(?<=[.!?।])\s+|\r?\n+/u)
+    const separator = roast
+        ? /(?<=[.!?।])[^\S\r\n]+(?![^\S\r\n]*\p{Extended_Pictographic})|\r?\n+/u
+        : /(?<=[.!?।])\s+|\r?\n+/u;
+    const line = String(response ?? "").split(separator)
         .map(sentence => sentence.trim().replace(/’/g, "'"))
         .find(sentence => sentence && sentence.length <= 140 &&
-            sentence.split(/\s+/u).length <= 18 && !ASSISTANT_SCRIPT.test(sentence));
+            sentence.split(/\s+/u).length <= 18 && !ASSISTANT_SCRIPT.test(sentence) &&
+            (!roast || (!/[?？؟]/u.test(sentence) && ROAST_PROFANITY.test(sentence) && ROAST_END.test(sentence))));
     if (line) return line;
 
+    if (roast) return type === "provocation" && bauaaMentioned ? replies.toxicOwner : replies.roast;
     if (type === "affection" && mood === "romantic") return replies.romantic;
-    if (type === "provocation" && bauaaMentioned) {
-        return mood === "very_toxic" ? replies.toxicOwner : replies.owner;
-    }
+    if (type === "provocation" && bauaaMentioned) return replies.owner;
     return replies[type];
 }
 
