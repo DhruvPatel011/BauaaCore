@@ -373,6 +373,16 @@ Public Spotify link playback needs no Spotify credentials. For Spotify account l
 
 ### Render and uptime monitoring
 
+#### Run BauaaCore and Lavalink in one Render web service
+
+In the existing Render web service, open **Settings → Build → Source → Edit**. Select the **Docker** runtime, use the repository root as the build context, and set the Dockerfile path to `./Dockerfile`. Keep the service's `DISCORD_TOKEN`, `MONGODB_URI`, and any optional provider credentials in its **Environment** settings. Set the health check path to `/ready`.
+
+The image starts BauaaCore on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It configures the bot for both command groups and includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
+
+Check for `BauaaCore instance role: all` and `[Music] Lavalink primary connected` in the Render logs. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
+
+#### Run BauaaCore with a separate audio node
+
 Set the environment variables in the Render web service settings. Use `npm ci` for the build command and `npm start` for the start command. Render provides `PORT`.
 
 To enable the YouTube audio resolver on the Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. Use Node.js 22 or newer and redeploy the bot. Lavalink can then fetch YouTube audio through the bot when the YouTube stream URL is bound to the bot's IP.

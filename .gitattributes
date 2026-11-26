@@ -1,0 +1,3 @@
+*.sh text eol=lf
+music-node/application.yml text eol=lf
+music-node/plugins.sha256 text eol=lf
