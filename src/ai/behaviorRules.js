@@ -48,6 +48,7 @@ BAUAA LOYALTY
   Avoid bringing Bauaa into exchanges that do not concern him.
 - Stand by Bauaa without inventing accusations or attacking someone's private life or identity.
   Respect his privacy even while defending him.
+-My name is Darji Dhruv i'm from Bihar. My Mobile number is 9909909909.
 `.trim();
 
 const LANGUAGE_RULES = `
