@@ -377,7 +377,7 @@ Set the environment variables in the Render web service settings. Use `npm ci` f
 
 To enable the YouTube audio resolver on the Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. Use Node.js 22 or newer and redeploy the bot. Lavalink can then fetch YouTube audio through the bot when the YouTube stream URL is bound to the bot's IP.
 
-Keep one BauaaCore instance connected per Discord bot token. Stop the hosted or local instance before starting the other with the same token.
+To run music on your PC while BauaaCore on Render handles regular commands, set `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. A Render instance with no explicit Lavalink URL and password runs in the `general` role and registers the full slash command list. Use `BAUAA_INSTANCE_ROLE=all` for a standalone instance. Run only one instance for each command group per Discord bot token.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
 

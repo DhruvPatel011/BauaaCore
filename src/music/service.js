@@ -48,10 +48,10 @@ function assertVoice(interaction, channel) {
     if (!channel.joinable) throw new MusicError("I can’t join that channel. Check its member limit and permissions.");
 }
 
-function createMusic(client, { env = process.env, data = library() } = {}) {
+function createMusic(client, { env = process.env, data = library(), enabled = true } = {}) {
     let nodes;
     try {
-        nodes = nodeOptions(env);
+        nodes = enabled ? nodeOptions(env) : [];
     } catch (error) {
         console.error("Music configuration:", error.message);
         nodes = [];

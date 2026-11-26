@@ -295,6 +295,7 @@ function installMusic(client, deps) {
         const [rawName, ...args] = message.content.slice(config.prefix.length).trim().match(/"[^"\n]*"|\S+/g)?.map(part => part.replace(/^"(.*)"$/, "$1")) || [];
         const item = commandsByName.get(rawName?.toLowerCase());
         if (!item) return false;
+        if (deps?.enabled === false) return true;
         const interaction = { guild: message.guild, guildId: message.guild.id, channelId: message.channelId,
             user: message.author, member: message.member, memberPermissions: message.member?.permissions };
         try {

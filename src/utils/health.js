@@ -20,7 +20,7 @@ async function pingDatabase() {
     }
 }
 
-function createHealthHandler(client) {
+function createHealthHandler(client, instanceRole) {
     let check;
     return async (req, res) => {
         let path;
@@ -35,6 +35,7 @@ function createHealthHandler(client) {
             return sendJson(res, 200, {
                 service: "BauaaCore",
                 status: "running",
+                instanceRole,
                 discord: client.isReady() ? "connected" : "disconnected",
                 uptime: Math.floor(process.uptime()),
                 timestamp: new Date().toISOString(),
@@ -55,6 +56,7 @@ function createHealthHandler(client) {
             return sendJson(res, ready ? 200 : 503, {
                 service: "BauaaCore",
                 status: ready ? "ready" : "not_ready",
+                instanceRole,
                 discord: discordConnected ? "connected" : "disconnected",
                 database,
                 timestamp: new Date().toISOString(),

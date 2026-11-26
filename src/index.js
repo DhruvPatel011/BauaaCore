@@ -54,6 +54,7 @@ const {
 
 const { shouldSkipIgnoredEvent } = require("./utils/ignoreManager");
 const { createHealthHandler } = require("./utils/health");
+const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
 
 // ========================================
 // 📡 EVENT IMPORTS
@@ -110,7 +111,12 @@ const client = new Client({
 // ========================================
 
 client.commands = new Collection();
-const music = installMusic(client);
+const instanceRole = getInstanceRole();
+const handlesMusic = handlesCommand(instanceRole, true);
+const handlesGeneral = handlesCommand(instanceRole, false);
+const music = installMusic(client, { enabled: handlesMusic });
+const musicCommandNames = new Set(music.commands.map(command => command.data.name));
+console.log(`BauaaCore instance role: ${instanceRole}`);
 
 const commands = [
     // Existing commands
@@ -153,6 +159,7 @@ console.log(`📦 Loaded ${client.commands.size} Slash Commands Successfully!`);
 // ========================================
 
 function registerEvent(eventName, handler, logger = null) {
+    if (!handlesGeneral) return;
     client.on(eventName, async (...args) => {
         try {
             if (await shouldSkipIgnoredEvent(eventName, args)) {
@@ -226,6 +233,7 @@ client.on("messageCreate", async (message) => {
     } catch (error) {
         console.warn("Music text command failed:", error?.code || error?.name);
     }
+    if (!handlesGeneral) return;
     try {
         await messageCreateEvent.execute(message);
     } catch (error) {
@@ -329,7 +337,7 @@ registerEvent(
 // 🌐 HTTP HEALTH SERVER
 // ========================================
 
-const health = createHealthHandler(client);
+const health = createHealthHandler(client, instanceRole);
 const server = http.createServer((req, res) => {
     if (!music.handleHttp(req, res)) health(req, res);
 });
@@ -415,6 +423,7 @@ client.once("clientReady", async () => {
     console.log("╚══════════════════════════════════════╝");
     console.log("");
 
+    if (!handlesGeneral) return;
     try {
         const applicationCommands = [
             ...client.commands.values(),
@@ -443,7 +452,7 @@ client.once("clientReady", async () => {
 
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
-        if (interaction.isButton() || interaction.isStringSelectMenu()) {
+        if (handlesMusic && (interaction.isButton() || interaction.isStringSelectMenu())) {
             await music.component(interaction).catch(error => console.warn("Music interaction failed:", error?.code || error?.name));
         }
         return;
@@ -453,7 +462,7 @@ client.on("interactionCreate", async (interaction) => {
         interaction.commandName
     );
 
-    if (!command) {
+    if (!command || !handlesCommand(instanceRole, musicCommandNames.has(interaction.commandName))) {
         return;
     }
 
