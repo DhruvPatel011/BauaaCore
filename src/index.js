@@ -450,19 +450,57 @@ client.once("clientReady", async () => {
 // ⚡ SLASH COMMAND HANDLER
 // ========================================
 
+async function musicOfflineFallback(interaction) {
+    // Give the music instance time to acknowledge.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    try {
+        await interaction.reply({
+            content:
+                "🔴 **Music Service Unavailable**\n" +
+                "The music service is currently offline or not responding. " +
+                "Please try again later.",
+            flags: 64,
+        });
+    } catch (error) {
+        // The music instance may have already responded.
+        if ([40060, 10062].includes(error?.code)) return;
+
+        console.warn("Music fallback failed:", error?.code || error?.name);
+    }
+}
+
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
-        if (handlesMusic && (interaction.isButton() || interaction.isStringSelectMenu())) {
-            await music.component(interaction).catch(error => console.warn("Music interaction failed:", error?.code || error?.name));
+        if (interaction.isButton() || interaction.isStringSelectMenu()) {
+            const isMusicComponent =
+                interaction.customId?.startsWith("bauaa:music:");
+
+            if (isMusicComponent) {
+                if (handlesMusic) {
+                    await music.component(interaction).catch(error =>
+                        console.warn(
+                            "Music interaction failed:",
+                            error?.code || error?.name
+                        )
+                    );
+                } else if (instanceRole === "general") {
+                    await musicOfflineFallback(interaction);
+                }
+            }
         }
         return;
     }
 
-    const command = client.commands.get(
-        interaction.commandName
-    );
+    const command = client.commands.get(interaction.commandName);
+    const isMusicCommand = musicCommandNames.has(interaction.commandName);
 
-    if (!command || !handlesCommand(instanceRole, musicCommandNames.has(interaction.commandName))) {
+    if (instanceRole === "general" && isMusicCommand) {
+        await musicOfflineFallback(interaction);
+        return;
+    }
+
+    if (!command || !handlesCommand(instanceRole, isMusicCommand)) {
         return;
     }
 
