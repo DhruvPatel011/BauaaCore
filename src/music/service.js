@@ -3,7 +3,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, PermissionFlagsBits, Routes } = require("discord.js");
 const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalink-client");
 const { sanitizeSingleLine } = require("../ai/contentFilters");
-const { status: terminalStatus } = require("../utils/terminal");
+const { log } = require("../utils/runtimeLog");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
@@ -50,7 +50,7 @@ function assertVoice(interaction, channel) {
     if (!channel.joinable) throw new MusicError("I can’t join that channel. Check its member limit and permissions.");
 }
 
-function createMusic(client, { env = process.env, data = library(), enabled = true } = {}) {
+function createMusic(client, { env = process.env, data = library(), enabled = true, onNodeReady } = {}) {
     const embedded = env.BAUAA_EMBEDDED_LAVALINK === "1";
     const startupDeadline = Date.now() + 3 * 60_000;
     let audioConnected = false;
@@ -58,7 +58,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     try {
         nodes = enabled ? nodeOptions(env) : [];
     } catch (error) {
-        terminalStatus("ERROR", "Lavalink", `Configuration error · ${error.message}`);
+        log("ERROR", "Audio Node", "Configuration error.", error);
         nodes = [];
     }
     const mediaHosts = customHosts(env);
@@ -71,6 +71,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const activeVoice = new Map();
     const selections = new Map();
     const connectionErrors = new Map();
+    const readyNodes = new WeakSet();
     const trackPreparers = new WeakMap();
     const prefetchingNodes = new WeakSet();
     const manager = nodes.length ? new LavalinkManager({
@@ -277,7 +278,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                         if (alternate) {
                             Object.assign(alternate.info, { title: result.info.title, author: result.info.author });
                             result = alternate;
-                            console.info("[Music] YouTube unavailable · SoundCloud match ready");
+                            log("DEBUG", "Music", "YouTube unavailable. Recovered with a SoundCloud match.");
                         }
                     }
                 }
@@ -552,6 +553,14 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     });
 
     if (manager) {
+        function reportReady(node) {
+            if (!isReadyNode(node) || readyNodes.has(node)) return;
+            readyNodes.add(node);
+            connectionErrors.delete(node.id);
+            if (onNodeReady) onNodeReady(node.id);
+            else log("SUCCESS", "Audio Node", `${node.id} connected`);
+        }
+
         manager.nodeManager.on("error", (node, error) => {
             const status = /^Unexpected server response: (\d{3})$/.exec(error?.message)?.[1];
             const detail = status ? `HTTP ${status}` : error?.code || error?.name || "unknown error";
@@ -559,15 +568,22 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             const now = Date.now();
             if (last?.detail === detail && now - last.time < 30_000) return;
             connectionErrors.set(node.id, { detail, time: now });
-            terminalStatus("WARN", "Lavalink", `${node.id} connection · ${detail}`);
+            const action = status === "401" || status === "403" ? " Check the Lavalink password." : "";
+            log("WARNING", "Audio Node", `${node.id} connection failed (${detail}).${action}`);
         });
-        manager.nodeManager.on("connect", node => {
-            connectionErrors.delete(node.id);
-            terminalStatus("READY", "Lavalink", `${node.id} connected`);
+        manager.nodeManager.on("connect", reportReady);
+        manager.nodeManager.on("raw", (node, packet) => {
+            // The library emits raw before setting the session ID from the ready packet.
+            if (packet.op === "ready") queueMicrotask(() => reportReady(node));
+        });
+        manager.nodeManager.on("disconnect", (node, { code, reason }) => {
+            if (readyNodes.delete(node) && !["Node-Destroy", "Node-Disconnect"].includes(reason)) {
+                log("WARNING", "Audio Node", `${node.id} disconnected (${code})`);
+            }
         });
         manager.on("trackStart", (player, track) => {
             const title = sanitizeSingleLine(track?.info?.title, 100);
-            if (title) terminalStatus("INFO", "Music", `Playing ${title}`);
+            if (title) log("INFO", "Music", `Playing ${title}`);
             player.deleteData("votes");
             player.deleteData("sponsorSegments");
             prefetchNext(player);

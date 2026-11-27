@@ -2,13 +2,44 @@ const { spawn, spawnSync } = require("node:child_process");
 const { existsSync, readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
-const { redactPrivateData } = require("../src/ai/contentFilters");
-const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
-const { banner, status } = require("../src/utils/terminal");
 
 const javaEnv = { ...process.env };
 process.chdir(join(__dirname, ".."));
 require("dotenv").config({ quiet: true });
+
+const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
+const { terminal } = require("../src/utils/terminal");
+const { bridgeConsole, captureLavalink, log, safeText } = require("../src/utils/runtimeLog");
+
+let java;
+let javaClosed;
+let handingOff = false;
+let stopping = false;
+let checkingLavalink = false;
+
+async function stopJava() {
+    if (!java) return;
+    stopping = true;
+    java.kill();
+    await Promise.race([javaClosed, delay(2_000, undefined, { ref: false })]);
+}
+
+async function stopStartup(signal) {
+    if (stopping) return;
+    stopping = true;
+    if (handingOff) return;
+    terminal.beginShutdown("Stopping local startup");
+    await stopJava();
+    terminal.finishShutdown(true, "Startup cancelled");
+    process.exit(signal === "SIGINT" ? 130 : 143);
+}
+
+function runBot() {
+    if (stopping) return;
+    handingOff = true;
+    const bot = require("../src/index");
+    if (java) bot.setLocalLavalinkCleanup(stopJava);
+}
 
 function javaExecutable() {
     if (process.platform !== "win32") return "java";
@@ -47,40 +78,45 @@ async function waitForLavalink(url, password) {
         if (await lavalinkReady(url, password)) return;
         await delay(500);
     }
-    throw new Error("Lavalink did not become ready within 60 seconds. Check the Java output above.");
+    throw new Error("Lavalink did not become ready within 60 seconds. Check lavalink.ndjson or enable BAUAA_VERBOSE.");
 }
 
 async function start() {
     const automatic = process.argv[2] === "--auto";
     const role = automatic ? getInstanceRole() : "music";
-    banner(role);
+    bridgeConsole();
+    terminal.begin(role);
+    process.on("SIGINT", stopStartup);
+    process.on("SIGTERM", stopStartup);
 
     const missing = ["DISCORD_TOKEN", "MONGODB_URI"].filter(name => !process.env[name]?.trim());
     if (missing.length) throw new Error(`Set ${missing.join(" and ")} in .env.`);
 
     const password = process.env.LAVALINK_PASSWORD;
     if (automatic && (process.platform !== "win32" || process.env.RENDER === "true" || !password ||
-        !handlesCommand(role, true))) return require("../src/index");
+        !handlesCommand(role, true))) return runBot();
 
     let url;
     try {
         url = new URL(process.env.LAVALINK_URL || "http://127.0.0.1:2333");
     } catch (error) {
-        if (automatic) return require("../src/index");
+        if (automatic) return runBot();
         throw new Error("Set LAVALINK_URL to a local HTTP origin for this launcher.", { cause: error });
     }
     const local = url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname) &&
         url.pathname === "/" && !url.username && !url.password && !url.search && !url.hash;
     if (!local) {
-        if (automatic) return require("../src/index");
+        if (automatic) return runBot();
         throw new Error("Set LAVALINK_URL to a local HTTP origin for this launcher.");
     }
     if (!password) throw new Error("Set LAVALINK_PASSWORD in .env.");
 
-    status("WAIT", "Lavalink", `Checking ${url.origin}`);
+    checkingLavalink = true;
+    terminal.stage("lavalink", "working", "Checking the local HTTP endpoint");
     if (await lavalinkReady(url, password)) {
-        status("READY", "Lavalink", "Using the existing local server");
+        terminal.stage("lavalink", "ready", "Reused local server");
     } else {
+        if (stopping) return;
         const cwd = join(process.cwd(), "music-node");
         if (!existsSync(join(cwd, "Lavalink.jar"))) {
             throw new Error("Place Lavalink.jar in music-node. See Run the music server in README.md.");
@@ -93,8 +129,8 @@ async function start() {
             // Use the existing preloaded-plugin profile to skip Maven update checks.
             args.push("--spring.profiles.active=render");
         }
-        status("WAIT", "Lavalink", "Starting local Java process (up to 60s)");
-        const child = spawn(javaExecutable(), args, {
+        terminal.stage("lavalink", "working", "Starting the JVM");
+        java = spawn(javaExecutable(), args, {
             cwd,
             env: {
                 ...javaEnv,
@@ -102,39 +138,33 @@ async function start() {
                 SERVER_ADDRESS: "127.0.0.1",
                 SERVER_PORT: url.port || "80",
             },
-            stdio: "inherit",
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
         });
-        process.once("exit", () => child.kill());
-        let ready = false;
-        let stopping = false;
-        const stop = signal => {
-            stopping = true;
-            if (ready) return;
-            status("INFO", "Shutdown", `${signal} received during startup`);
-            process.exit(signal === "SIGINT" ? 130 : 143);
-        };
-        process.once("SIGINT", stop);
-        process.once("SIGTERM", stop);
-
+        captureLavalink(java, password);
+        process.once("exit", () => java.kill());
+        javaClosed = new Promise(resolve => java.once("close", resolve));
         const stopped = new Promise((_, reject) => {
-            child.once("error", error => reject(new Error(
+            java.once("error", error => reject(new Error(
                 error.code === "ENOENT" ? "Java is missing from PATH." : `Could not start Java (${error.code}).`
             )));
-            child.once("exit", (code, signal) => reject(new Error(`Local Java process exited (${signal ?? code}).`)));
+            java.once("close", (code, signal) => reject(new Error(`Local Java process exited (${signal ?? code}).`)));
         });
         await Promise.race([waitForLavalink(url, password), stopped]);
-        ready = true;
         void stopped.catch(error => {
-            if (!stopping) status("WARN", "Lavalink", error.message);
+            if (!stopping) log("WARNING", "Lavalink", error);
         });
-        status("READY", "Lavalink", `Local server listening at ${url.origin}`);
+        terminal.stage("lavalink", "ready", "Local JVM responding");
     }
 
+    checkingLavalink = false;
     if (!automatic) process.env.BAUAA_INSTANCE_ROLE = role;
-    require("../src/index");
+    runBot();
 }
 
 start().catch(error => {
-    status("ERROR", "Startup", redactPrivateData(error.message));
+    if (stopping) return;
+    if (!checkingLavalink || !terminal.stage("lavalink", "failed", safeText(error.message))) log("ERROR", "Startup", error);
+    terminal.abort();
     process.exit(1);
 });

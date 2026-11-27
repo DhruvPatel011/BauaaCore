@@ -43,7 +43,7 @@ module.exports = {
             const logChannel = await getLogChannel(guild, "messages");
 
             if (!logChannel) {
-                console.log("❌ deleted-msg-logs channel not found");
+                console.warn("deleted-msg-logs channel not found");
                 return;
             }
             if (!(await claimLogEvent(guild.id, "messageDeleteBulk", channel.id, ...[...messages.keys()].sort()))) return;
