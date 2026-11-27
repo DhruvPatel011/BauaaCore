@@ -1,6 +1,8 @@
 const {
     ChannelType, InteractionContextType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder,
 } = require("discord.js");
+const { createHelpBrowser } = require("../help/browser");
+const { musicCategories } = require("../help/categories");
 const { createMusic } = require("./service");
 const { createAccounts } = require("./accounts");
 const { controls, playInput, playSelection, spotifySearch } = require("./playback");
@@ -72,13 +74,17 @@ const definitions = [
     command("clearliked", "Clear your liked songs.", confirm),
     command("sortliked", "Sort your liked songs.", choice("by", "Field to sort by", { Title: "title", Artist: "author", Source: "source" }, true)),
     group("playlist", "Manage your saved playlists.",
-        command("list", "List your playlists."), command("create", "Create a new playlist.", name),
-        command("delete", "Delete a saved playlist.", name), command("view", "View tracks in a playlist.", name, page),
-        command("play", "Queue a saved playlist.", name), command("addtrack", "Find a track or link and add it to a playlist.", name, query),
-        command("removetrack", "Remove a track by its playlist position.", name, position),
+        command("list", "List your playlists."),
+        command("create", "Create a new playlist.", name),
         command("import", "Import a supported playlist or album link as a new playlist.", name, query),
+        command("savequeue", "Save the player queue as a new playlist.", name),
+        command("addtrack", "Find a track or link and add it to a playlist.", name, query),
+        command("addnowplaying", "Save the current track to a playlist.", name),
+        command("view", "View tracks in a playlist.", name, page),
+        command("play", "Queue a saved playlist.", name),
+        command("removetrack", "Remove a track by its playlist position.", name, position),
         command("setcover", "Set a playlist cover image.", name, string("image", "Public HTTPS image link, or omit to clear it", false, 1000)),
-        command("addnowplaying", "Save the current track to a playlist.", name), command("savequeue", "Save the player queue as a new playlist.", name)),
+        command("delete", "Delete a saved playlist.", name)),
     ...Object.keys(filters).map(effect => command(effect, `Toggle the ${effect} audio effect.`)),
     command("resetfilter", "Clear the active audio effect."),
     command("247", "Configure whether BauaaCore stays in voice when idle.", enabled),
@@ -101,10 +107,11 @@ const definitions = [
     command("debug", "Show diagnostics about the music player and its audio node."),
     command("speak", "Queue text-to-speech in your voice channel.", string("text", "What BauaaCore should read aloud", true, 250)),
     group("spotify", "Connect Spotify to access your playlists.", command("login", "Authorize BauaaCore to see your Spotify playlists."),
-        command("logout", "Remove the saved Spotify connection."), command("playlists", "List your Spotify playlists or queue a playlist by ID.", string("id", "Spotify playlist ID", false, 22), page)),
+        command("playlists", "List your Spotify playlists or queue a playlist by ID.", string("id", "Spotify playlist ID", false, 22), page),
+        command("logout", "Remove the saved Spotify connection.")),
     group("lastfm", "Connect Last.fm and optionally scrobble music.", command("login", "Start or finish Last.fm authorization."),
-        command("logout", "Remove the saved Last.fm connection."), command("scrobble", "Enable or disable Last.fm scrobbling.", enabled)),
-    group("music", "Get help and status for BauaaCore music.", command("help", "List music commands."), command("ping", "Show Discord gateway latency."),
+        command("scrobble", "Enable or disable Last.fm scrobbling.", enabled), command("logout", "Remove the saved Last.fm connection.")),
+    group("music", "Get help and status for BauaaCore music.", command("help", "Browse the music command guide."), command("ping", "Show Discord gateway latency."),
         command("invite", "Get the BauaaCore installation link."), command("statistics", "View music player statistics.")),
 ];
 
@@ -218,7 +225,7 @@ function installMusic(client, deps) {
             if (options.sub === "ping") return `Discord gateway · ${Math.round(client.ws.ping)} ms`;
             if (options.sub === "invite") return `[Add BauaaCore to Discord](https://discord.com/oauth2/authorize?client_id=${client.user.id}&scope=bot%20applications.commands)`;
             if (options.sub === "statistics") return `Active music players · ${music.manager?.players.size || 0}\nConnected audio nodes · ${music.manager?.nodeManager.leastUsedNodes().length || 0}`;
-            return `**BauaaCore music**\n${definitions.map(item => `\`/${item.name}\``).join(" · ")}\nTry \`/play\` with a song name or URL. Use \`/nowplaying\` for the player buttons.`;
+            return help.open(interaction.user.id);
         }
         const result = await controls(music, interaction, command, options);
         const player = music.playerFor(interaction.guildId);
@@ -252,8 +259,16 @@ function installMusic(client, deps) {
         }
     } }));
 
+    const help = createHelpBrowser(commands, musicCategories, {
+        prefix: `${prefix}help:`,
+        title: "BauaaCore Music Guide",
+        description: "Join a voice channel, then use `/play` with a song name or URL. Use `/nowplaying` to open the player controls.",
+        anchor: "music",
+    });
+
     async function component(interaction) {
         if (!interaction.inGuild() || !interaction.customId?.startsWith(prefix)) return;
+        if (help.matches(interaction.customId)) return help.component(interaction);
         const [action, id] = interaction.customId.slice(prefix.length).split(":");
         if (interaction.isStringSelectMenu() && action === "select") {
             await interaction.deferUpdate();

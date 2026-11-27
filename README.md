@@ -161,7 +161,7 @@ BauaaCore routes Discord events and slash commands to its logging, AI, and music
 
 ## Commands
 
-BauaaCore uses Discord slash commands to provide access to its features.
+Run `/help` in Discord to browse every BauaaCore slash command. Choose a category, then select a command or subcommand to see its usage and options.
 
 ### Logging
 
@@ -247,7 +247,7 @@ Join a voice channel and run `/play query:<song name or URL>`. Once BauaaCore is
 | `/247`, `/dj`, `/restrictcommand`, `/announce`, `/buttons`, `/voicechannelstatus` | Configure server playback, permissions, and the player card |
 | `/sponsorblock`, `/forcefix`, `/switchaudionode`, `/debug` | Configure sponsor skipping, repair playback, or check the audio server |
 | `/spotify`, `/lastfm`, `/searchalbum`, `/searchartist`, `/searchplaylist` | Access optional account and catalog integrations |
-| `/music help` | List music commands |
+| `/music help` | Browse the interactive music command guide |
 
 `/play` accepts YouTube videos and playlists, public Spotify links, and sources available on your Lavalink node. Public Spotify links use visible tracks from Spotify’s embed and match them to audio from another source. Private playlists, generated mixes, and tracks beyond the embed’s list may be unavailable. Playback depends on source availability and the audio node’s configuration.
 

@@ -1,0 +1,17 @@
+module.exports = [
+    require("./setupLogs"),
+    require("./logsStatus"),
+    require("./ignore"),
+    require("./game"),
+    require("./aiSetup"),
+    require("./aiAddChannel"),
+    require("./aiRemoveChannel"),
+    require("./aiListChannels"),
+    require("./aiDisable"),
+    require("./aiEnable"),
+    require("./aiStatus"),
+    require("./aiMood"),
+    require("./aiReset"),
+    require("./aiMemory"),
+    require("./aiInstructions"),
+];

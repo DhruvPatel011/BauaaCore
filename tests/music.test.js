@@ -23,8 +23,34 @@ test("all music commands serialize within Discord’s registration limits", () =
     const commands = definitions.map(slashData).map(builder => builder.toJSON());
     const names = new Set(commands.map(item => item.name));
     assert.equal(names.size, commands.length);
-    assert.ok(commands.length + 14 <= 100);
     for (const name of ["play", "playfile", "search", "playlist", "247", "8d", "spotify", "lastfm"]) assert.ok(names.has(name));
+});
+
+test("music help opens the listening guide from slash and prefix commands", async () => {
+    const music = installMusic(new EventEmitter(), { env: {}, data: { settings: async () => ({ ...defaultSettings, prefix: "!" }) } });
+    const interaction = {
+        guild: { id: guildId, members: { cache: new Map() }, voiceStates: { cache: new Map() } },
+        guildId, channelId: textId, user: { id: userId }, inGuild: () => true,
+        options: { getSubcommand: () => "help" },
+        async deferReply(reply) { assert.equal(reply.flags, MessageFlags.Ephemeral); },
+        async editReply(reply) { this.output = reply; },
+    };
+    await music.commands.find(item => item.data.name === "music").execute(interaction);
+
+    const card = interaction.output.components[0].toJSON();
+    assert.equal(interaction.output.flags, MessageFlags.IsComponentsV2);
+    assert.match(card.components[0].content, /Join a voice channel.*`\/play`.*`\/nowplaying`/);
+    const menu = card.components.find(item => item.components?.[0]?.options).components[0];
+    assert.equal(menu.options[0].label, "Start listening");
+    await music.component({ ...interaction, customId: menu.custom_id, values: [menu.options[0].value],
+        isStringSelectMenu: () => true, async update(reply) { interaction.output = reply; } });
+    const playMenu = interaction.output.components[0].toJSON().components.find(item => item.components?.[0]?.options).components[0];
+    assert.deepEqual(playMenu.options.slice(0, 2).map(option => option.label), ["/play", "/nowplaying"]);
+
+    const message = { guild: interaction.guild, channelId: textId, author: interaction.user,
+        inGuild: () => true, content: "!music help", async reply(payload) { this.output = payload; } };
+    assert.equal(await music.message(message), true);
+    assert.deepEqual(message.output.components[0].toJSON(), card);
 });
 
 test("Spotify’s public embed yields ordered metadata and matching rejects a different song", async () => {

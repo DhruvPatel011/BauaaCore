@@ -42,25 +42,9 @@ if (missingSettings.length) {
 // 📦 COMMAND IMPORTS
 // ========================================
 
-// Existing commands
-const setupLogsCommand = require("./commands/setupLogs");
-const logsStatusCommand = require("./commands/logsStatus");
-const ignoreCommand = require("./commands/ignore");
-const gameCommand = require("./commands/game");
+const generalCommands = require("./commands");
+const { createHelpCommand } = require("./commands/help");
 const { installMusic } = require("./music/commands");
-
-// AI commands
-const aiSetupCommand = require("./commands/aiSetup");
-const aiAddChannelCommand = require("./commands/aiAddChannel");
-const aiRemoveChannelCommand = require("./commands/aiRemoveChannel");
-const aiListChannelsCommand = require("./commands/aiListChannels");
-const aiDisableCommand = require("./commands/aiDisable");
-const aiEnableCommand = require("./commands/aiEnable");
-const aiStatusCommand = require("./commands/aiStatus");
-const aiMoodCommand = require("./commands/aiMood");
-const aiResetCommand = require("./commands/aiReset");
-const aiMemoryCommand = require("./commands/aiMemory");
-const aiInstructionsCommand = require("./commands/aiInstructions");
 
 // Database and utilities
 const {
@@ -139,27 +123,9 @@ const lavalinkMode = !handlesMusic ? "Disabled for this role" :
     process.env.BAUAA_EMBEDDED_LAVALINK === "1" ? "Managed by the host" : "No local JVM to start";
 terminal.stage("lavalink", "skipped", lavalinkMode);
 
-const commands = [
-    // Existing commands
-    setupLogsCommand,
-    logsStatusCommand,
-    ignoreCommand,
-    gameCommand,
-    ...music.commands,
-
-    // AI commands
-    aiSetupCommand,
-    aiAddChannelCommand,
-    aiRemoveChannelCommand,
-    aiListChannelsCommand,
-    aiDisableCommand,
-    aiEnableCommand,
-    aiStatusCommand,
-    aiMoodCommand,
-    aiResetCommand,
-    aiMemoryCommand,
-    aiInstructionsCommand,
-];
+const commands = [...generalCommands, ...music.commands];
+const helpCommand = createHelpCommand(commands);
+commands.push(helpCommand);
 
 for (const command of commands) {
     if (!command?.data?.name || typeof command.execute !== "function") {
@@ -477,6 +443,12 @@ async function musicOfflineFallback(interaction) {
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) {
         if (interaction.isButton() || interaction.isStringSelectMenu()) {
+            if (helpCommand.matches(interaction.customId)) {
+                if (handlesGeneral) {
+                    await helpCommand.component(interaction).catch(error => logError("Help", "Command guide update failed", error));
+                }
+                return;
+            }
             const isMusicComponent =
                 interaction.customId?.startsWith("bauaa:music:");
 
