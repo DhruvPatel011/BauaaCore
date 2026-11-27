@@ -2,6 +2,7 @@ const { createHash, randomUUID } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, PermissionFlagsBits, Routes } = require("discord.js");
 const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalink-client");
+const { sanitizeSingleLine } = require("../ai/contentFilters");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
@@ -68,6 +69,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const voiceWork = new Map();
     const activeVoice = new Map();
     const selections = new Map();
+    const connectionErrors = new Map();
     const trackPreparers = new WeakMap();
     const prefetchingNodes = new WeakSet();
     const manager = nodes.length ? new LavalinkManager({
@@ -274,7 +276,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                         if (alternate) {
                             Object.assign(alternate.info, { title: result.info.title, author: result.info.author });
                             result = alternate;
-                            console.info("[Music] Using a matched SoundCloud track after YouTube audio resolution failed");
+                            console.info("[Music] YouTube unavailable · SoundCloud match ready");
                         }
                     }
                 }
@@ -551,10 +553,20 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     if (manager) {
         manager.nodeManager.on("error", (node, error) => {
             const status = /^Unexpected server response: (\d{3})$/.exec(error?.message)?.[1];
-            warn(`node ${node.id}${status ? ` WebSocket HTTP ${status}` : ""}`, error);
+            const detail = status ? `HTTP ${status}` : error?.code || error?.name || "unknown error";
+            const last = connectionErrors.get(node.id);
+            const now = Date.now();
+            if (last?.detail === detail && now - last.time < 30_000) return;
+            connectionErrors.set(node.id, { detail, time: now });
+            console.warn(`[Music] Lavalink ${node.id} · ${detail}`);
         });
-        manager.nodeManager.on("connect", node => console.log(`[Music] Lavalink ${node.id} connected`));
-        manager.on("trackStart", player => {
+        manager.nodeManager.on("connect", node => {
+            connectionErrors.delete(node.id);
+            console.log(`[Music] Lavalink ${node.id} connected`);
+        });
+        manager.on("trackStart", (player, track) => {
+            const title = sanitizeSingleLine(track?.info?.title, 100);
+            if (title) console.info(`[Music] Playing ${title}`);
             player.deleteData("votes");
             player.deleteData("sponsorSegments");
             prefetchNext(player);

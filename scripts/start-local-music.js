@@ -82,6 +82,7 @@ async function start() {
             // Use the existing preloaded-plugin profile to skip Maven update checks.
             args.push("--spring.profiles.active=render");
         }
+        console.log("[Lavalink] Starting");
         const child = spawn(javaExecutable(), args, {
             cwd,
             env: {
@@ -111,11 +112,11 @@ async function start() {
     }
 
     if (!automatic) process.env.BAUAA_INSTANCE_ROLE = "music";
-    console.log("Local Lavalink is ready. Starting BauaaCore.");
+    console.log("[Lavalink] Ready");
     require("../src/index");
 }
 
 start().catch(error => {
-    console.error(error.message);
+    console.error(`[Startup] ${error.message}`);
     process.exit(1);
 });

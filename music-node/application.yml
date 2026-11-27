@@ -1,3 +1,7 @@
+spring:
+  main:
+    banner-mode: "off"
+
 server:
   address: 127.0.0.1
   port: 2333
@@ -62,7 +66,10 @@ plugins:
 
 logging:
   level:
-    root: INFO
+    root: WARN
+  pattern:
+    console: >-
+      [Lavalink] %level %replace(%msg){'[\r\n]+',' '} %replace(%rootException{short}){'(?s)^([^\r\n]+).*','$1'}%n%nopex
   request:
     enabled: false
 

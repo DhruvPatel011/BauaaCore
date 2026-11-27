@@ -1,5 +1,5 @@
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 
 const http = require("http");
 
@@ -7,6 +7,7 @@ const {
     Client,
     GatewayIntentBits,
     Collection,
+    MessageFlags,
     Partials,
     RESTJSONErrorCodes,
 } = require("discord.js");
@@ -18,7 +19,7 @@ const {
 const PORT = Number(process.env.PORT) || 10000;
 
 if (!process.env.DISCORD_TOKEN) {
-    console.error("❌ DISCORD_TOKEN is missing from .env!");
+    console.error("[Startup] DISCORD_TOKEN is missing");
     process.exit(1);
 }
 
@@ -55,6 +56,13 @@ const {
 const { shouldSkipIgnoredEvent } = require("./utils/ignoreManager");
 const { createHealthHandler } = require("./utils/health");
 const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
+const { redactPrivateData, sanitizeSingleLine } = require("./ai/contentFilters");
+
+function logError(label, error) {
+    const description = sanitizeSingleLine(redactPrivateData(error?.message ?? error), 180);
+    const code = error?.code ? ` (${error.code})` : "";
+    console.error(`${label}${code} · ${description || "Unknown error"}`);
+}
 
 // ========================================
 // 📡 EVENT IMPORTS
@@ -153,13 +161,11 @@ for (const command of commands) {
     client.commands.set(command.data.name, command);
 }
 
-console.log(`📦 Loaded ${client.commands.size} Slash Commands Successfully!`);
-
 // ========================================
 // 🔄 GENERIC EVENT REGISTRATION
 // ========================================
 
-function registerEvent(eventName, handler, logger = null) {
+function registerEvent(eventName, handler) {
     if (!handlesGeneral) return;
     client.on(eventName, async (...args) => {
         try {
@@ -168,31 +174,14 @@ function registerEvent(eventName, handler, logger = null) {
                 return;
             }
         } catch (error) {
-            console.error(
-                `⚠️ Ignore check failed for ${eventName}:`,
-                error
-            );
+            logError(`[Event] ${eventName} ignore check failed`, error);
             return;
-        }
-
-        if (logger) {
-            try {
-                logger(...args);
-            } catch (error) {
-                console.error(
-                    `❌ ${eventName} Console Logger Error:`,
-                    error
-                );
-            }
         }
 
         try {
             await handler.execute(...args);
         } catch (error) {
-            console.error(
-                `❌ ${eventName} Event Error:`,
-                error
-            );
+            logError(`[Event] ${eventName} failed`, error);
         }
     });
 }
@@ -203,18 +192,12 @@ function registerEvent(eventName, handler, logger = null) {
 
 registerEvent(
     "messageDelete",
-    events.messageDelete,
-    () => console.log("🗑️ MESSAGE DELETE EVENT RECEIVED")
+    events.messageDelete
 );
 
 registerEvent(
     "messageDeleteBulk",
-    events.messageDeleteBulk,
-    (messages) => {
-        console.log(
-            `🗑️ BULK DELETE EVENT RECEIVED | ${messages.size} messages`
-        );
-    }
+    events.messageDeleteBulk
 );
 
 registerEvent(
@@ -233,13 +216,13 @@ client.on("messageCreate", async (message) => {
     try {
         if (await music.message(message)) return;
     } catch (error) {
-        console.warn("Music text command failed:", error?.code || error?.name);
+        logError("[Music] Text command failed", error);
     }
     if (!handlesGeneral) return;
     try {
         await messageCreateEvent.execute(message);
     } catch (error) {
-        console.error("❌ AI Message Event Error:", error);
+        logError("[AI] Message event failed", error);
     }
 });
 
@@ -268,24 +251,12 @@ registerEvent(
 
 registerEvent(
     "guildBanAdd",
-    events.guildBanAdd,
-    (ban) => {
-        console.log(
-            "🔨 BAN EVENT RECEIVED:",
-            ban.user?.tag || "Unknown user"
-        );
-    }
+    events.guildBanAdd
 );
 
 registerEvent(
     "guildBanRemove",
-    events.guildBanRemove,
-    (ban) => {
-        console.log(
-            "🔓 UNBAN EVENT RECEIVED:",
-            ban.user?.tag || "Unknown user"
-        );
-    }
+    events.guildBanRemove
 );
 
 // ========================================
@@ -352,7 +323,7 @@ const server = http.createServer((req, res) => {
 // ========================================
 
 server.on("error", (error) => {
-    console.error("❌ HTTP SERVER ERROR:", error);
+    logError("[HTTP] Server error", error);
     process.exit(1);
 });
 
@@ -361,16 +332,7 @@ server.on("error", (error) => {
 // ========================================
 
 server.listen(PORT, "0.0.0.0", () => {
-    console.log("");
-    console.log("╔══════════════════════════════════════╗");
-    console.log("║       🚀 BAUAACORE HTTP SERVER       ║");
-    console.log("╠══════════════════════════════════════╣");
-    console.log(`║  🌐 Port       : ${PORT}`);
-    console.log("║  ❤️ Health     : /health");
-    console.log("║  🟢 Readiness  : /ready");
-    console.log("║  ⚡ Status     : RUNNING");
-    console.log("╚══════════════════════════════════════╝");
-    console.log("");
+    console.log(`[HTTP] Port ${PORT} · /health · /ready`);
 });
 
 // ========================================
@@ -378,36 +340,28 @@ server.listen(PORT, "0.0.0.0", () => {
 // ========================================
 
 client.on("shardDisconnect", (event, shardId) => {
-    console.error(
-        `🔴 Discord Gateway disconnected | Shard: ${shardId} | Code: ${event.code} | Reason: ${event.reason || "Unknown"}`
-    );
+    const reason = sanitizeSingleLine(redactPrivateData(event.reason || "Unknown reason"), 120);
+    console.warn(`[Discord] Shard ${shardId} disconnected (${event.code}) · ${reason}`);
 });
 
 client.on("shardReconnecting", (shardId) => {
-    console.log(
-        `🟡 Discord Gateway reconnecting | Shard: ${shardId}`
-    );
+    console.log(`[Discord] Shard ${shardId} reconnecting`);
 });
 
 client.on("shardResume", (shardId, replayedEvents) => {
-    console.log(
-        `🟢 Discord Gateway resumed | Shard: ${shardId} | Replayed: ${replayedEvents}`
-    );
+    console.log(`[Discord] Shard ${shardId} resumed · ${replayedEvents} events replayed`);
 });
 
 client.on("shardError", (error, shardId) => {
-    console.error(
-        `❌ Discord Shard Error | Shard: ${shardId}`,
-        error
-    );
+    logError(`[Discord] Shard ${shardId} error`, error);
 });
 
 client.on("error", (error) => {
-    console.error("❌ Discord Client Error:", error);
+    logError("[Discord] Client error", error);
 });
 
 client.on("warn", (message) => {
-    console.warn("⚠️ Discord Warning:", message);
+    console.warn(`[Discord] ${sanitizeSingleLine(redactPrivateData(message), 180)}`);
 });
 
 // ========================================
@@ -415,18 +369,8 @@ client.on("warn", (message) => {
 // ========================================
 
 client.once("clientReady", async () => {
-    void Promise.resolve(music.start()).catch(error => console.warn("Music node startup failed:", error?.code || error?.name));
-    console.log("");
-    console.log("╔══════════════════════════════════════╗");
-    console.log("║          🤖 BAUAACORE BOT            ║");
-    console.log("╠══════════════════════════════════════╣");
-    console.log(`║  👤 Bot Name  : ${client.user.tag}`);
-    console.log(`║  🆔 Bot ID    : ${client.user.id}`);
-    console.log(`║  🌍 Servers   : ${client.guilds.cache.size}`);
-    console.log(`║  📦 Commands  : ${client.commands.size}`);
-    console.log("║  🟢 Status    : ONLINE");
-    console.log("╚══════════════════════════════════════╝");
-    console.log("");
+    void Promise.resolve(music.start()).catch(error => logError("[Music] Node startup failed", error));
+    console.log(`[Discord] ${client.user.tag} online · ${client.guilds.cache.size} servers · ${client.commands.size} commands`);
 
     if (!handlesGeneral) return;
     try {
@@ -439,15 +383,9 @@ client.once("clientReady", async () => {
 
         await client.application.commands.set(applicationCommands);
 
-        console.log(
-            `🎉 Successfully Registered ${applicationCommands.length} Global Slash Commands!`
-        );
-
+        console.log(`[Discord] Registered ${applicationCommands.length} slash commands`);
     } catch (error) {
-        console.error(
-            "❌ Failed to Register Global Slash Commands:",
-            error
-        );
+        logError("[Discord] Slash command registration failed", error);
     }
 });
 
@@ -471,7 +409,7 @@ async function musicOfflineFallback(interaction) {
         // The music instance may have already responded.
         if ([40060, 10062].includes(error?.code)) return;
 
-        console.warn("Music fallback failed:", error?.code || error?.name);
+        logError("[Music] Offline reply failed", error);
     }
 }
 
@@ -483,12 +421,7 @@ client.on("interactionCreate", async (interaction) => {
 
             if (isMusicComponent) {
                 if (handlesMusic) {
-                    await music.component(interaction).catch(error =>
-                        console.warn(
-                            "Music interaction failed:",
-                            error?.code || error?.name
-                        )
-                    );
+                    await music.component(interaction).catch(error => logError("[Music] Player control failed", error));
                 } else if (reportsMusicOffline) {
                     await musicOfflineFallback(interaction);
                 }
@@ -506,39 +439,24 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     try {
-        console.log(
-            `⚡ Command Executed: /${interaction.commandName} | User: ${interaction.user.tag}`
-        );
-
+        console.log(`[Command] /${interaction.commandName} · ${sanitizeSingleLine(interaction.user.tag, 80)}`);
         await command.execute(interaction);
-
     } catch (error) {
         if (error?.code === RESTJSONErrorCodes.InteractionHasAlreadyBeenAcknowledged) {
-            console.warn(`Interaction already acknowledged: /${interaction.commandName}. Check for another BauaaCore instance using this bot token.`);
+            console.warn(`[Command] /${interaction.commandName} already acknowledged · check for another instance`);
             return;
         }
-        console.error(
-            `❌ Command Execution Error: /${interaction.commandName}`,
-            error?.code || error?.name
-        );
+        logError(`[Command] /${interaction.commandName} failed`, error);
 
         try {
-            const reply = {
-                content: "❌ An error occurred while executing this command.",
-                ephemeral: true,
-            };
-
+            const content = "❌ An error occurred while executing this command.";
             if (interaction.replied || interaction.deferred) {
-                await interaction.editReply(reply);
+                await interaction.editReply({ content });
             } else {
-                await interaction.reply(reply);
+                await interaction.reply({ content, flags: MessageFlags.Ephemeral });
             }
-
         } catch (replyError) {
-            console.error(
-                "❌ Interaction Reply Error:",
-                replyError?.code || replyError?.name
-            );
+            logError("[Command] Error reply failed", replyError);
         }
     }
 });
@@ -548,18 +466,11 @@ client.on("interactionCreate", async (interaction) => {
 // ========================================
 
 process.on("unhandledRejection", (reason) => {
-    console.error(
-        "🚨 Unhandled Promise Rejection:",
-        reason
-    );
+    logError("[Process] Unhandled rejection", reason);
 });
 
 process.on("uncaughtException", (error) => {
-    console.error(
-        "🚨 Uncaught Exception:",
-        error
-    );
-
+    logError("[Process] Uncaught exception", error);
     process.exit(1);
 });
 
@@ -576,22 +487,16 @@ async function shutdown(signal) {
 
     isShuttingDown = true;
 
-    console.log("");
-    console.log("╔══════════════════════════════════════╗");
-    console.log("║        🛑 BAUAACORE SHUTDOWN         ║");
-    console.log("╠══════════════════════════════════════╣");
-    console.log(`║  📡 Signal : ${signal}`);
-    console.log("║  🔄 Closing connections...");
-    console.log("╚══════════════════════════════════════╝");
+    console.log(`[Shutdown] ${signal} · closing connections`);
 
-    await music.close()?.catch(error => console.warn("Music shutdown failed:", error?.code || error?.name));
+    await music.close()?.catch(error => logError("[Music] Shutdown failed", error));
 
     // Disconnect Discord
     client.destroy();
 
     // Close MongoDB
     await closeDatabase().catch((error) => {
-        console.error("❌ MongoDB Shutdown Error:", error);
+        logError("[MongoDB] Shutdown failed", error);
     });
 
     // Close HTTP server
@@ -601,7 +506,7 @@ async function shutdown(signal) {
         });
     }
 
-    console.log("✅ BauaaCore Shutdown Completed.");
+    console.log("[Shutdown] Complete");
 
     process.exit(0);
 }
@@ -613,26 +518,12 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // 🔐 DISCORD LOGIN
 // ========================================
 
-console.log("");
-console.log("╔══════════════════════════════════════╗");
-console.log("║       🚀 STARTING BAUAACORE          ║");
-console.log("╚══════════════════════════════════════╝");
-console.log("");
-
 async function startBot() {
     try {
-        console.log("🍃 Connecting to MongoDB...");
-
         await connectDatabase();
-
-        console.log("🔐 Connecting to Discord Gateway...");
-
         await client.login(process.env.DISCORD_TOKEN);
-
-        console.log("✅ Discord Authentication Successful!");
-
     } catch (error) {
-        console.error("❌ Startup Failed:", error);
+        logError("[Startup] Failed", error);
 
         await closeDatabase().catch(() => {});
 
