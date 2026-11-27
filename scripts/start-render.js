@@ -2,7 +2,7 @@ const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const { resolve } = require("node:path");
 const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
-const { captureLavalink, log } = require("../src/utils/runtimeLog");
+const { captureLavalink } = require("../src/utils/runtimeLog");
 
 const root = resolve(__dirname, "..");
 const host = "127.0.0.1";
@@ -14,7 +14,7 @@ const botEnv = {
     ...process.env,
     BAUAA_INSTANCE_ROLE: instanceRole,
     BAUAA_EMBEDDED_LAVALINK: withAudio ? "1" : "0",
-    BAUAA_PLAIN: "1",
+    BAUAA_RENDER_LOGS: "1",
     PORT: botPort,
 };
 if (withAudio) {
@@ -29,8 +29,8 @@ if (withAudio) {
 function start(name, command, args, cwd, env, captureAudio = false) {
     const stdio = captureAudio ? ["ignore", "pipe", "pipe"] : "inherit";
     const child = spawn(command, args, { cwd, env, stdio });
-    if (captureAudio) captureLavalink(child, env.LAVALINK_PASSWORD);
-    child.once("error", error => log("ERROR", "Render", `${name} process error`, error));
+    if (captureAudio) captureLavalink(child, env.LAVALINK_PASSWORD, { render: true });
+    child.once("error", error => console.error(`[Render] ${name} process error: ${error.code || error.name}`));
     const closed = new Promise(resolve => {
         child.once("close", (code, signal) => resolve({ code, signal }));
     });
@@ -64,7 +64,7 @@ function startAudio() {
     }, true);
     void audio.closed.then(({ code, signal }) => {
         if (stopping) return;
-        log("WARNING", "Render", `Lavalink stopped (${signal ?? code}). Retrying in 5 seconds.`);
+        console.warn(`[Render] Lavalink stopped (${signal ?? code}). Retrying in 5 seconds.`);
         restartTimer = setTimeout(startAudio, 5_000);
     });
 }
@@ -82,7 +82,7 @@ if (withAudio) startAudio();
 const bot = start("BauaaCore", process.execPath, [resolve(root, "src", "index.js")], root, botEnv);
 void bot.closed.then(({ code, signal }) => {
     if (stopping) return;
-    log("ERROR", "Render", `BauaaCore stopped (${signal ?? code}).`);
+    console.error(`[Render] BauaaCore stopped (${signal ?? code}).`);
     return shutdown(code || 1);
 });
 process.on("SIGTERM", () => void shutdown(0));

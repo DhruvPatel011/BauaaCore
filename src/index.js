@@ -2,7 +2,7 @@
 require("dotenv").config({ quiet: true });
 
 const http = require("http");
-const { terminal } = require("./utils/terminal");
+const { terminal, usesRenderLogs } = require("./utils/terminal");
 const { bridgeConsole, log, safeText } = require("./utils/runtimeLog");
 const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
 
@@ -20,6 +20,7 @@ const {
 // ========================================
 
 const PORT = Number(process.env.PORT) || 10000;
+const renderLogs = usesRenderLogs();
 let instanceRole;
 try {
     instanceRole = getInstanceRole();
@@ -390,11 +391,10 @@ function completeStartup(audio) {
 
 function onNodeReady(id) {
     if (isShuttingDown) return;
-    if (terminal.stage("audio", "ready", "Authenticated audio session")) {
-        completeStartup("Connected");
-    } else {
-        log("SUCCESS", "Audio Node", `${id} connected`);
-    }
+    const first = terminal.stage("audio", "ready", "Authenticated audio session");
+    if (first) completeStartup("Connected");
+    if (renderLogs) log("SUCCESS", "Music", `Lavalink ${id} connected`);
+    else if (!first) log("SUCCESS", "Audio Node", `${id} connected`);
 }
 
 function startAudio() {
@@ -404,17 +404,19 @@ function startAudio() {
         return;
     }
     if (!music.manager) {
-        terminal.stage("audio", "warning", "Audio node unavailable. Check LAVALINK_URL and LAVALINK_PASSWORD.");
+        terminal.stage("audio", "warning", "No audio node configured. Check LAVALINK_URL and LAVALINK_PASSWORD.");
         completeStartup("Unconfigured");
         return;
     }
 
-    terminal.stage("audio", "working", "Waiting for the audio session");
-    audioTimer = setTimeout(() => {
-        if (!terminal.stage("audio", "warning", "Connection continues in background")) return;
-        completeStartup("Connecting");
-    }, audioStartupTimeout);
-    audioTimer.unref();
+    terminal.stage("audio", "working", renderLogs ? "Connecting the bot to audio" : "Waiting for the audio session");
+    if (!renderLogs) {
+        audioTimer = setTimeout(() => {
+            if (!terminal.stage("audio", "warning", "Connection continues in background")) return;
+            completeStartup("Connecting");
+        }, audioStartupTimeout);
+        audioTimer.unref();
+    }
 
     void Promise.resolve().then(() => music.start()).catch(error => {
         if (isShuttingDown) return;
@@ -426,7 +428,10 @@ function startAudio() {
 
 client.once("clientReady", async () => {
     if (isShuttingDown) return;
-    terminal.stage("discord", "ready", "Gateway identified");
+    const gatewayStatus = renderLogs
+        ? `${safeText(client.user.tag)} online in ${process.uptime().toFixed(1)}s · ${client.guilds.cache.size} servers · ${client.commands.size} loaded commands`
+        : "Gateway identified";
+    terminal.stage("discord", "ready", gatewayStatus);
     startAudio();
     if (!handlesGeneral) return;
     try {
@@ -439,7 +444,7 @@ client.once("clientReady", async () => {
 
         await client.application.commands.set(applicationCommands);
 
-        if (!isShuttingDown) log("DEBUG", "Discord", `Registered ${applicationCommands.length} slash commands`);
+        if (!isShuttingDown) log(renderLogs ? "SUCCESS" : "DEBUG", "Discord", `Registered ${applicationCommands.length} slash commands`);
     } catch (error) {
         if (!isShuttingDown) logError("Discord", "Slash command registration failed", error);
     }
@@ -544,7 +549,7 @@ async function shutdown(reason, exitCode = 0) {
     if (isShuttingDown) return;
     isShuttingDown = true;
     clearTimeout(audioTimer);
-    terminal.beginShutdown(`Closing services (${reason})`);
+    terminal.beginShutdown(renderLogs ? `${reason} · closing connections` : `Closing services (${reason})`);
 
     const deadline = setTimeout(() => {
         terminal.finishShutdown(false, "Cleanup exceeded 10s");
@@ -565,7 +570,7 @@ async function shutdown(reason, exitCode = 0) {
     ]);
 
     clearTimeout(deadline);
-    terminal.finishShutdown(!cleanupFailed, cleanupFailed ? "Stopped with cleanup errors" : "Services closed");
+    terminal.finishShutdown(!cleanupFailed, cleanupFailed ? "Stopped with cleanup errors" : renderLogs ? "Cleanup finished" : "Services closed");
     process.exit(exitCode || Number(cleanupFailed));
 }
 
@@ -580,9 +585,9 @@ async function startBot() {
     let stage = "mongodb";
     try {
         terminal.stage(stage, "working", "Connecting and checking indexes");
-        await connectDatabase();
+        const database = await connectDatabase();
         if (isShuttingDown) return;
-        terminal.stage(stage, "ready", "Connection and indexes verified");
+        terminal.stage(stage, "ready", renderLogs ? `Connected to ${safeText(database.databaseName)}` : "Connection and indexes verified");
 
         stage = "discord";
         terminal.stage(stage, "working", "Connecting to the gateway");
@@ -597,6 +602,7 @@ async function startBot() {
 
 terminal.stage("http", "working", "Opening the HTTP listener");
 server.listen(PORT, "0.0.0.0", () => {
-    terminal.stage("http", "ready", `Listening on port ${server.address().port}`);
+    const port = server.address().port;
+    terminal.stage("http", "ready", renderLogs ? `Port ${port} · /health · /ready` : `Listening on port ${port}`);
     void startBot();
 });

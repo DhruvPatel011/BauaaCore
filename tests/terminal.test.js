@@ -6,6 +6,7 @@ const { join } = require("node:path");
 const { test } = require("node:test");
 const { stripVTControlCharacters } = require("node:util");
 const stringWidth = require("string-width");
+const { version } = require("../package.json");
 const { createTerminal } = require("../src/utils/terminal");
 const { safeText } = require("../src/utils/runtimeLog");
 
@@ -65,6 +66,36 @@ test("dumb terminals use plain logs and interrupted startup never prints a succe
     assert.doesNotMatch(out.output + err.output, /\x1b|[^\x00-\x7f]|100%/);
     assert.match(err.output, /ERROR\s+\[HTTP Server\] Port already in use/);
     assert.match(out.output, /SUCCESS\s+\[Shutdown\] Services closed/);
+});
+
+test("the Render launcher uses the original service log format without a dashboard", () => {
+    const out = capture(true);
+    const err = capture(true);
+    const terminal = createTerminal({ out, err, env: { BAUAA_RENDER_LOGS: "1" } });
+    terminal.begin("all");
+    terminal.stage("lavalink", "skipped", "Managed by the host");
+    terminal.stage("http", "working", "Opening the HTTP listener");
+    terminal.stage("http", "ready", "Port 10000 · /health · /ready");
+    terminal.stage("mongodb", "working", "Connecting and checking indexes");
+    terminal.stage("mongodb", "ready", "Connected to smoke");
+    terminal.stage("discord", "ready", "BauaaCore online");
+    terminal.stage("audio", "ready", "Authenticated audio session");
+    terminal.complete(metrics);
+    terminal.log({ level: "SUCCESS", component: "Music", message: "Lavalink primary connected" });
+    terminal.beginShutdown("SIGTERM · closing connections");
+    terminal.finishShutdown(true, "Cleanup finished");
+    assert.equal(err.output, "");
+    assert.equal(out.output, [
+        `[BauaaCore] INFO v${version} · role all`,
+        "[HTTP] READY Port 10000 · /health · /ready",
+        "[MongoDB] WAIT Connecting and checking indexes",
+        "[MongoDB] READY Connected to smoke",
+        "[Discord] READY BauaaCore online",
+        "[Music] Lavalink primary connected",
+        "[Shutdown] INFO SIGTERM · closing connections",
+        "[Shutdown] INFO Cleanup finished",
+        "",
+    ].join("\n"));
 });
 
 test("logging redacts credential values, URLs, auth headers, and terminal control codes", () => {

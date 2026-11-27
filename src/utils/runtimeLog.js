@@ -3,7 +3,7 @@ const { resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { stripVTControlCharacters } = require("node:util");
 const { redactPrivateData, sanitizeSingleLine } = require("../ai/contentFilters");
-const { terminal } = require("./terminal");
+const { terminal, usesRenderLogs } = require("./terminal");
 
 const maxBytes = 2 * 1024 * 1024;
 const routineJavaWarning = /^(?:\[Lavalink\]\s*)?WARN(?:ING)?[:\s]+(?:a restricted method in java\.lang\.System has been called|java\.lang\.System::load has been called by|Please consider reporting this to the maintainers of|Restricted methods will be blocked in a future release)/i;
@@ -78,7 +78,7 @@ function log(level, component, ...values) {
     const message = safeText(values.map(describe).join(" "));
     if (!message) return;
     const entry = { time: new Date(), level, component, message };
-    if (level === "DEBUG") {
+    if (level === "DEBUG" && !usesRenderLogs()) {
         writeFile("application.ndjson", entry);
         if (process.env.BAUAA_VERBOSE !== "1") return;
     }
@@ -108,7 +108,7 @@ function javaLevel(line, stream) {
     return "DEBUG";
 }
 
-function captureLavalink(child, password) {
+function captureLavalink(child, password, { render = false } = {}) {
     const secrets = [...secretValues(), ...(password ? [password] : [])].sort((a, b) => b.length - a.length);
     for (const stream of ["stdout", "stderr"]) {
         const input = child[stream];
@@ -117,10 +117,16 @@ function captureLavalink(child, password) {
         lines.on("line", line => {
             line = stripVTControlCharacters(line);
             if (!line.trim()) return;
-            const level = javaLevel(line, stream);
+            const content = render ? line : line.replace(/^(?:\[Lavalink\]\s*)?(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)[:\s]+/i, "");
             const message = javaOptionsLine.test(line)
                 ? "Java runtime options were supplied through the environment."
-                : safeText(line.replace(/^(?:\[Lavalink\]\s*)?(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)[:\s]+/i, ""), secrets, 4000);
+                : safeText(content, secrets, 4000);
+            if (render) {
+                const output = stream === "stderr" ? process.stderr : process.stdout;
+                output.write(`${message}\n`);
+                return;
+            }
+            const level = javaLevel(line, stream);
             const entry = { time: new Date(), level, component: "Lavalink JVM", stream, message };
             writeFile("lavalink.ndjson", entry);
             if (process.env.BAUAA_VERBOSE === "1") {

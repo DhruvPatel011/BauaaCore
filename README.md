@@ -350,7 +350,7 @@ Set any of these options in `.env` to customize the console.
 | `BAUAA_VERBOSE=1` | Show debug messages and captured Lavalink output in the terminal. |
 | `BAUAA_LOG_DIR` | Store diagnostic files in this directory. Defaults to `music-node/logs`. |
 
-The console displays connection failures and errors as they occur. Routine application diagnostics go to `application.ndjson`, and output from a Lavalink process launched by BauaaCore goes to `lavalink.ndjson`. Each file rotates at 2 MiB and retains one previous file.
+The local console displays connection failures and errors as they occur. Routine application diagnostics go to `application.ndjson`, and output from a locally launched Lavalink process goes to `lavalink.ndjson`. Each file rotates at 2 MiB and retains one previous file.
 
 To launch specifically in music mode, select **BauaaCore Music** in the VS Code **Run and Debug** menu and press **F5**, or run `npm.cmd run start:music`.
 
@@ -392,7 +392,7 @@ In the existing Render web service, open **Settings → Build → Source → Edi
 
 By default the image starts BauaaCore in the `all` role on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
-Check for `role all` and `SUCCESS [Audio Node]` in the Render logs. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
+Check for `role all` and `[Music] Lavalink primary connected` in the Render logs. Render shows the service status lines and Lavalink output in its log stream. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
 
 #### Run BauaaCore with a separate audio node
 

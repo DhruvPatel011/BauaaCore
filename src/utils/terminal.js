@@ -24,6 +24,8 @@ const palettes = {
 };
 const logColors = { INFO: "cyan", SUCCESS: "green", WARNING: "amber", ERROR: "red", DEBUG: "gray" };
 const logIcons = { INFO: "›", SUCCESS: "✓", WARNING: "!", ERROR: "×", DEBUG: "·" };
+const renderLevels = { SUCCESS: "READY", WARNING: "WARN", DEBUG: "INFO" };
+const renderComponents = { "HTTP Server": "HTTP", "Discord Gateway": "Discord", "Audio Node": "Lavalink" };
 const states = {
     ready: ["✓", "+", "green", "Ready"],
     skipped: ["−", "-", "gray", "Skipped"],
@@ -39,9 +41,14 @@ function duration(ms) {
     return `${Math.floor(ms / 60_000)}m ${Math.floor(ms / 1000) % 60}s`;
 }
 
+function usesRenderLogs(env = process.env) {
+    return env.RENDER === "true" || env.BAUAA_RENDER_LOGS === "1";
+}
+
 function createTerminal({ out = process.stdout, err = process.stderr, env = process.env, now = () => performance.now(),
     uptime = () => process.uptime() * 1000 } = {}) {
-    const interactive = () => Boolean(out.isTTY && err.isTTY && env.TERM !== "dumb" && env.BAUAA_PLAIN !== "1");
+    const render = usesRenderLogs(env);
+    const interactive = () => Boolean(!render && out.isTTY && err.isTTY && env.TERM !== "dumb" && env.BAUAA_PLAIN !== "1");
     const unicode = env.BAUAA_ASCII !== "1" && env.TERM !== "dumb";
     const width = () => Math.min(out.columns || 80, 88) - 1;
     const colorsEnabled = () => interactive() && !env.NO_COLOR && env.FORCE_COLOR !== "0";
@@ -140,6 +147,14 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
     function log({ time = new Date(), level, component, message }) {
         const stream = level === "WARNING" || level === "ERROR" ? err : out;
         const detail = displayText(message);
+        if (render) {
+            const label = renderComponents[component] || component;
+            const status = renderLevels[level] || level;
+            const prefix = component === "Application" ? "" :
+                component === "Music" && (level === "INFO" || level === "SUCCESS") ? "[Music] " : `[${label}] ${status} `;
+            stream.write(`${prefix}${detail}\n`);
+            return;
+        }
         clearLine();
         if (interactive()) {
             const clock = paint(time.toTimeString().slice(0, 8), "gray", stream);
@@ -157,7 +172,7 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         role = instanceRole;
         phase = "startup";
         if (!interactive()) {
-            log({ level: "INFO", component: "BauaaCore", message: `v${version} | role ${role}` });
+            log({ level: "INFO", component: "BauaaCore", message: `v${version}${render ? separator : " | "}role ${role}` });
         } else {
             const name = width() >= 57
                 ? art.map((line, index) => `  ${gradient(line.trimEnd(), index)}`).join("\n")
@@ -174,6 +189,12 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         if (settled.has(state) && row.started !== undefined) row.elapsed = now() - row.started;
         row.state = state;
         row.detail = detail;
+        if (render) {
+            if (state === "skipped" || (id === "http" && state === "working") || (id === "audio" && state === "ready")) return true;
+            const level = state === "working" ? "WAIT" : state === "ready" ? "SUCCESS" : state === "warning" ? "WARNING" : "ERROR";
+            log({ level, component: services[id], message: detail });
+            return true;
+        }
         if (!interactive() || state === "failed" || state === "warning") {
             const level = state === "ready" ? "SUCCESS" : state === "failed" ? "ERROR" : state === "warning" ? "WARNING" : "INFO";
             const timing = row.elapsed === undefined ? "" : ` (${duration(row.elapsed)})`;
@@ -216,6 +237,7 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         if (phase !== "startup" || [...rows.values()].some(row => !settled.has(row.state))) return;
         phase = "running";
         stopAnimation();
+        if (render) return;
         const attention = [...rows.values()].some(row => ["warning", "failed"].includes(row.state));
         const title = attention ? "Startup complete with warnings" : "Startup complete";
         const bot = displayText(metrics.bot);
@@ -261,12 +283,12 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
     function finishShutdown(success, message) {
         phase = "stopped";
         stopAnimation();
-        const elapsed = shutdownAt === undefined ? "" : ` (${duration(now() - shutdownAt)})`;
-        log({ level: success ? "SUCCESS" : "ERROR", component: "Shutdown", message: `${message}${elapsed}` });
+        const elapsed = render || shutdownAt === undefined ? "" : ` (${duration(now() - shutdownAt)})`;
+        log({ level: success ? (render ? "INFO" : "SUCCESS") : "ERROR", component: "Shutdown", message: `${message}${elapsed}` });
     }
 
     return { begin, stage, log, complete, abort, beginShutdown, finishShutdown };
 }
 
 const terminal = createTerminal();
-module.exports = { createTerminal, terminal };
+module.exports = { createTerminal, terminal, usesRenderLogs };
