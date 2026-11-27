@@ -3,6 +3,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, PermissionFlagsBits, Routes } = require("discord.js");
 const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalink-client");
 const { sanitizeSingleLine } = require("../ai/contentFilters");
+const { status: terminalStatus } = require("../utils/terminal");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
@@ -57,7 +58,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     try {
         nodes = enabled ? nodeOptions(env) : [];
     } catch (error) {
-        console.error("Music configuration:", error.message);
+        terminalStatus("ERROR", "Lavalink", `Configuration error · ${error.message}`);
         nodes = [];
     }
     const mediaHosts = customHosts(env);
@@ -558,15 +559,15 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             const now = Date.now();
             if (last?.detail === detail && now - last.time < 30_000) return;
             connectionErrors.set(node.id, { detail, time: now });
-            console.warn(`[Music] Lavalink ${node.id} · ${detail}`);
+            terminalStatus("WARN", "Lavalink", `${node.id} connection · ${detail}`);
         });
         manager.nodeManager.on("connect", node => {
             connectionErrors.delete(node.id);
-            console.log(`[Music] Lavalink ${node.id} connected`);
+            terminalStatus("READY", "Lavalink", `${node.id} connected`);
         });
         manager.on("trackStart", (player, track) => {
             const title = sanitizeSingleLine(track?.info?.title, 100);
-            if (title) console.info(`[Music] Playing ${title}`);
+            if (title) terminalStatus("INFO", "Music", `Playing ${title}`);
             player.deleteData("votes");
             player.deleteData("sponsorSegments");
             prefetchNext(player);

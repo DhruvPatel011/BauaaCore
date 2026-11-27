@@ -337,6 +337,8 @@ npm start
 
 On Windows, run `npm.cmd start` from the repository root. With a loopback `LAVALINK_URL` and `LAVALINK_PASSWORD` configured, BauaaCore uses a running Lavalink process with that password or starts `music-node/Lavalink.jar` with Java 17 or newer. The launcher waits for Lavalink before connecting to Discord and uses the bot role configured in `.env`.
 
+The VS Code terminal shows the instance role and timestamped status lines for HTTP, MongoDB, Discord, and Lavalink. Press **Ctrl+C** to stop the bot. Set `NO_COLOR=1` in `.env` for a monochrome display. Redirected output uses plain text.
+
 To launch specifically in music mode, select **BauaaCore Music** in the VS Code **Run and Debug** menu and press **F5**, or run `npm.cmd run start:music`.
 
 Configure these settings in `.env` to enable music.
@@ -377,7 +379,7 @@ In the existing Render web service, open **Settings → Build → Source → Edi
 
 By default the image starts BauaaCore in the `all` role on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
-Check for `BauaaCore instance role: all` and `[Music] Lavalink primary connected` in the Render logs. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
+Check for `role all` and `[Lavalink] READY primary connected` in the Render logs. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
 
 #### Run BauaaCore with a separate audio node
 
@@ -387,7 +389,7 @@ To enable the YouTube audio resolver on the Render bot service, use `npm ci && b
 
 #### Run music on your PC and general commands on Render
 
-Set `BAUAA_INSTANCE_ROLE=general` in Render's environment and `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. With this setup the Render Docker service starts the bot without Lavalink. The general instance registers the full slash command list, and the music instance handles music commands and player buttons. Start the PC instance with `npm.cmd start` and check for `BauaaCore instance role: general` on Render and `BauaaCore instance role: music` on the PC.
+Set `BAUAA_INSTANCE_ROLE=general` in Render's environment and `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. With this setup the Render Docker service starts the bot without Lavalink. The general instance registers the full slash command list, and the music instance handles music commands and player buttons. Start the PC instance with `npm.cmd start` and check for the `general` role on Render and the `music` role in the PC's startup banner.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
 

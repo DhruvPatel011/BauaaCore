@@ -2,6 +2,8 @@
 require("dotenv").config({ quiet: true });
 
 const http = require("http");
+const { banner, status } = require("./utils/terminal");
+const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
 
 const {
     Client,
@@ -17,9 +19,12 @@ const {
 // ========================================
 
 const PORT = Number(process.env.PORT) || 10000;
+const instanceRole = getInstanceRole();
+banner(instanceRole);
 
-if (!process.env.DISCORD_TOKEN) {
-    console.error("[Startup] DISCORD_TOKEN is missing");
+const missingSettings = ["DISCORD_TOKEN", "MONGODB_URI"].filter(name => !process.env[name]?.trim());
+if (missingSettings.length) {
+    status("ERROR", "Startup", `Set ${missingSettings.join(" and ")} in .env.`);
     process.exit(1);
 }
 
@@ -55,13 +60,12 @@ const {
 
 const { shouldSkipIgnoredEvent } = require("./utils/ignoreManager");
 const { createHealthHandler } = require("./utils/health");
-const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
 const { redactPrivateData, sanitizeSingleLine } = require("./ai/contentFilters");
 
-function logError(label, error) {
+function logError(component, label, error) {
     const description = sanitizeSingleLine(redactPrivateData(error?.message ?? error), 180);
     const code = error?.code ? ` (${error.code})` : "";
-    console.error(`${label}${code} · ${description || "Unknown error"}`);
+    status("ERROR", component, `${label}${code} · ${description || "Unknown error"}`);
 }
 
 // ========================================
@@ -119,13 +123,11 @@ const client = new Client({
 // ========================================
 
 client.commands = new Collection();
-const instanceRole = getInstanceRole();
 const handlesMusic = handlesCommand(instanceRole, true);
 const handlesGeneral = handlesCommand(instanceRole, false);
 const reportsMusicOffline = instanceRole === "general" && !process.env.BAUAA_INSTANCE_ROLE?.trim();
 const music = installMusic(client, { enabled: handlesMusic });
 const musicCommandNames = new Set(music.commands.map(command => command.data.name));
-console.log(`BauaaCore instance role: ${instanceRole}`);
 
 const commands = [
     // Existing commands
@@ -174,14 +176,14 @@ function registerEvent(eventName, handler) {
                 return;
             }
         } catch (error) {
-            logError(`[Event] ${eventName} ignore check failed`, error);
+            logError("Event", `${eventName} ignore check failed`, error);
             return;
         }
 
         try {
             await handler.execute(...args);
         } catch (error) {
-            logError(`[Event] ${eventName} failed`, error);
+            logError("Event", `${eventName} failed`, error);
         }
     });
 }
@@ -216,13 +218,13 @@ client.on("messageCreate", async (message) => {
     try {
         if (await music.message(message)) return;
     } catch (error) {
-        logError("[Music] Text command failed", error);
+        logError("Music", "Text command failed", error);
     }
     if (!handlesGeneral) return;
     try {
         await messageCreateEvent.execute(message);
     } catch (error) {
-        logError("[AI] Message event failed", error);
+        logError("AI", "Message event failed", error);
     }
 });
 
@@ -323,16 +325,12 @@ const server = http.createServer((req, res) => {
 // ========================================
 
 server.on("error", (error) => {
-    logError("[HTTP] Server error", error);
-    process.exit(1);
-});
-
-// ========================================
-// 🚀 START HTTP SERVER
-// ========================================
-
-server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[HTTP] Port ${PORT} · /health · /ready`);
+    if (error.code === "EADDRINUSE") {
+        status("ERROR", "HTTP", `Port ${PORT} is already in use. Stop the other process or change PORT.`);
+    } else {
+        logError("HTTP", "Server error", error);
+    }
+    void shutdown("HTTP server failed", 1);
 });
 
 // ========================================
@@ -341,27 +339,27 @@ server.listen(PORT, "0.0.0.0", () => {
 
 client.on("shardDisconnect", (event, shardId) => {
     const reason = sanitizeSingleLine(redactPrivateData(event.reason || "Unknown reason"), 120);
-    console.warn(`[Discord] Shard ${shardId} disconnected (${event.code}) · ${reason}`);
+    status("WARN", "Discord", `Shard ${shardId} disconnected (${event.code}) · ${reason}`);
 });
 
 client.on("shardReconnecting", (shardId) => {
-    console.log(`[Discord] Shard ${shardId} reconnecting`);
+    status("WAIT", "Discord", `Shard ${shardId} reconnecting`);
 });
 
 client.on("shardResume", (shardId, replayedEvents) => {
-    console.log(`[Discord] Shard ${shardId} resumed · ${replayedEvents} events replayed`);
+    status("READY", "Discord", `Shard ${shardId} resumed · ${replayedEvents} events replayed`);
 });
 
 client.on("shardError", (error, shardId) => {
-    logError(`[Discord] Shard ${shardId} error`, error);
+    logError("Discord", `Shard ${shardId} error`, error);
 });
 
 client.on("error", (error) => {
-    logError("[Discord] Client error", error);
+    logError("Discord", "Client error", error);
 });
 
 client.on("warn", (message) => {
-    console.warn(`[Discord] ${sanitizeSingleLine(redactPrivateData(message), 180)}`);
+    status("WARN", "Discord", sanitizeSingleLine(redactPrivateData(message), 180));
 });
 
 // ========================================
@@ -369,8 +367,16 @@ client.on("warn", (message) => {
 // ========================================
 
 client.once("clientReady", async () => {
-    void Promise.resolve(music.start()).catch(error => logError("[Music] Node startup failed", error));
-    console.log(`[Discord] ${client.user.tag} online · ${client.guilds.cache.size} servers · ${client.commands.size} commands`);
+    if (isShuttingDown) return;
+    status("READY", "Discord",
+        `${client.user.tag} online in ${process.uptime().toFixed(1)}s · ${client.guilds.cache.size} servers · ${client.commands.size} loaded commands`);
+
+    if (music.manager) {
+        status("WAIT", "Lavalink", "Connecting the bot to audio");
+        void Promise.resolve().then(() => music.start()).catch(error => logError("Lavalink", "Node startup failed", error));
+    } else if (handlesMusic) {
+        status("WARN", "Lavalink", "No audio node configured. Check LAVALINK_URL and LAVALINK_PASSWORD.");
+    }
 
     if (!handlesGeneral) return;
     try {
@@ -383,9 +389,9 @@ client.once("clientReady", async () => {
 
         await client.application.commands.set(applicationCommands);
 
-        console.log(`[Discord] Registered ${applicationCommands.length} slash commands`);
+        if (!isShuttingDown) status("READY", "Discord", `Registered ${applicationCommands.length} slash commands`);
     } catch (error) {
-        logError("[Discord] Slash command registration failed", error);
+        if (!isShuttingDown) logError("Discord", "Slash command registration failed", error);
     }
 });
 
@@ -409,7 +415,7 @@ async function musicOfflineFallback(interaction) {
         // The music instance may have already responded.
         if ([40060, 10062].includes(error?.code)) return;
 
-        logError("[Music] Offline reply failed", error);
+        logError("Music", "Offline reply failed", error);
     }
 }
 
@@ -421,7 +427,7 @@ client.on("interactionCreate", async (interaction) => {
 
             if (isMusicComponent) {
                 if (handlesMusic) {
-                    await music.component(interaction).catch(error => logError("[Music] Player control failed", error));
+                    await music.component(interaction).catch(error => logError("Music", "Player control failed", error));
                 } else if (reportsMusicOffline) {
                     await musicOfflineFallback(interaction);
                 }
@@ -439,14 +445,14 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     try {
-        console.log(`[Command] /${interaction.commandName} · ${sanitizeSingleLine(interaction.user.tag, 80)}`);
+        status("INFO", "Command", `/${interaction.commandName} · ${sanitizeSingleLine(interaction.user.tag, 80)}`);
         await command.execute(interaction);
     } catch (error) {
         if (error?.code === RESTJSONErrorCodes.InteractionHasAlreadyBeenAcknowledged) {
-            console.warn(`[Command] /${interaction.commandName} already acknowledged · check for another instance`);
+            status("WARN", "Command", `/${interaction.commandName} already acknowledged · check for another instance`);
             return;
         }
-        logError(`[Command] /${interaction.commandName} failed`, error);
+        logError("Command", `/${interaction.commandName} failed`, error);
 
         try {
             const content = "❌ An error occurred while executing this command.";
@@ -456,7 +462,7 @@ client.on("interactionCreate", async (interaction) => {
                 await interaction.reply({ content, flags: MessageFlags.Ephemeral });
             }
         } catch (replyError) {
-            logError("[Command] Error reply failed", replyError);
+            logError("Command", "Error reply failed", replyError);
         }
     }
 });
@@ -466,11 +472,11 @@ client.on("interactionCreate", async (interaction) => {
 // ========================================
 
 process.on("unhandledRejection", (reason) => {
-    logError("[Process] Unhandled rejection", reason);
+    logError("Process", "Unhandled rejection", reason);
 });
 
 process.on("uncaughtException", (error) => {
-    logError("[Process] Uncaught exception", error);
+    logError("Process", "Uncaught exception", error);
     process.exit(1);
 });
 
@@ -480,35 +486,26 @@ process.on("uncaughtException", (error) => {
 
 let isShuttingDown = false;
 
-async function shutdown(signal) {
-    if (isShuttingDown) {
-        return;
-    }
-
+async function shutdown(reason, exitCode = 0) {
+    if (isShuttingDown) return;
     isShuttingDown = true;
+    status("INFO", "Shutdown", `${reason} · closing connections`);
 
-    console.log(`[Shutdown] ${signal} · closing connections`);
+    const deadline = setTimeout(() => {
+        status("ERROR", "Shutdown", "Cleanup exceeded 10s. Exiting.");
+        process.exit(1);
+    }, 10_000);
+    const httpClosed = new Promise(resolve => server.close(resolve));
+    await Promise.resolve().then(() => music.close()).catch(error => logError("Music", "Shutdown failed", error));
+    await client.destroy().catch(error => logError("Discord", "Shutdown failed", error));
+    await Promise.all([
+        httpClosed,
+        closeDatabase().catch(error => logError("MongoDB", "Shutdown failed", error)),
+    ]);
 
-    await music.close()?.catch(error => logError("[Music] Shutdown failed", error));
-
-    // Disconnect Discord
-    client.destroy();
-
-    // Close MongoDB
-    await closeDatabase().catch((error) => {
-        logError("[MongoDB] Shutdown failed", error);
-    });
-
-    // Close HTTP server
-    if (server.listening) {
-        await new Promise((resolve) => {
-            server.close(resolve);
-        });
-    }
-
-    console.log("[Shutdown] Complete");
-
-    process.exit(0);
+    clearTimeout(deadline);
+    status("INFO", "Shutdown", "Cleanup finished");
+    process.exit(exitCode);
 }
 
 process.on("SIGTERM", () => shutdown("SIGTERM"));
@@ -519,20 +516,24 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 // ========================================
 
 async function startBot() {
+    let component = "MongoDB";
     try {
-        await connectDatabase();
+        status("WAIT", component, "Connecting and checking indexes");
+        const database = await connectDatabase();
+        if (isShuttingDown) return;
+        status("READY", component, `Connected to ${database.databaseName}`);
+
+        component = "Discord";
+        status("WAIT", component, "Connecting to the gateway");
         await client.login(process.env.DISCORD_TOKEN);
     } catch (error) {
-        logError("[Startup] Failed", error);
-
-        await closeDatabase().catch(() => {});
-
-        if (server.listening) {
-            server.close();
-        }
-
-        process.exit(1);
+        if (isShuttingDown) return;
+        logError(component, "Startup failed", error);
+        await shutdown("Startup failed", 1);
     }
 }
 
-startBot();
+server.listen(PORT, "0.0.0.0", () => {
+    status("READY", "HTTP", `Port ${PORT} · /health · /ready`);
+    void startBot();
+});

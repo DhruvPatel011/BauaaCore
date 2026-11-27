@@ -28,7 +28,6 @@ async function connectDatabase() {
     );
     await database.collection("logged_events").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-    console.log(`✅ MongoDB connected | Database: ${database.databaseName}`);
     return database;
 }
 
@@ -44,7 +43,6 @@ async function closeDatabase() {
         await client.close();
         client = null;
         database = null;
-        console.log("🔒 MongoDB connection closed.");
     }
 }
 
