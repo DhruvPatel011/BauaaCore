@@ -78,8 +78,8 @@ function log(level, component, ...values) {
     const message = safeText(values.map(describe).join(" "));
     if (!message) return;
     const entry = { time: new Date(), level, component, message };
-    if (level === "DEBUG" && !usesRenderLogs()) {
-        writeFile("application.ndjson", entry);
+    if (level === "DEBUG") {
+        if (!usesRenderLogs()) writeFile("application.ndjson", entry);
         if (process.env.BAUAA_VERBOSE !== "1") return;
     }
     terminal.log(entry);
@@ -108,7 +108,8 @@ function javaLevel(line, stream) {
     return "DEBUG";
 }
 
-function captureLavalink(child, password, { render = false } = {}) {
+function captureLavalink(child, password) {
+    const render = usesRenderLogs();
     const secrets = [...secretValues(), ...(password ? [password] : [])].sort((a, b) => b.length - a.length);
     for (const stream of ["stdout", "stderr"]) {
         const input = child[stream];
@@ -117,20 +118,17 @@ function captureLavalink(child, password, { render = false } = {}) {
         lines.on("line", line => {
             line = stripVTControlCharacters(line);
             if (!line.trim()) return;
-            const content = render ? line : line.replace(/^(?:\[Lavalink\]\s*)?(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)[:\s]+/i, "");
+            const content = line.replace(/^(?:\[Lavalink\]\s*)?(?:TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)[:\s]+/i, "");
             const message = javaOptionsLine.test(line)
                 ? "Java runtime options were supplied through the environment."
                 : safeText(content, secrets, 4000);
-            if (render) {
-                const output = stream === "stderr" ? process.stderr : process.stdout;
-                output.write(`${message}\n`);
-                return;
-            }
             const level = javaLevel(line, stream);
             const entry = { time: new Date(), level, component: "Lavalink JVM", stream, message };
-            writeFile("lavalink.ndjson", entry);
+            if (!render) writeFile("lavalink.ndjson", entry);
             if (process.env.BAUAA_VERBOSE === "1") {
                 terminal.log(entry);
+            } else if (render && level === "INFO") {
+                terminal.log({ ...entry, message: message.slice(0, 600) });
             } else if ((level === "WARNING" && !routineJavaWarning.test(line)) || level === "ERROR") {
                 const key = `${level}:${message}`;
                 const now = Date.now();

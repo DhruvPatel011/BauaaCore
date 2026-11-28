@@ -9,7 +9,8 @@ const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { probeLavalink } = require("./nodeReadiness");
 const { audioStage, lookupBudget, playbackBudget } = require("./audioDeadline");
-const { checkedQuery, customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack, extractSearch } = require("./sources");
+const { checkedQuery, customHosts, isDirectMediaUrl, nativeMediaExtension, matchTrack, matchSoundCloudTrack,
+    searchTracks, storeTrack, streamProvider, directProviderTrack, extractSearch } = require("./sources");
 const { MusicError, TRACK_LIMIT, noMentions, trackTitle, ytDlpErrorDetail } = require("./shared");
 const { playerPanel, disconnectedPanel } = require("./panel");
 const filters = require("./filters");
@@ -80,7 +81,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const startup = embeddedPrimary ? new AbortController() : null;
     const mediaHosts = customHosts(env);
     const extractor = env.MUSIC_YTDLP_PATH?.trim();
-    const media = createMediaCache(env.MUSIC_MEDIA_BASE_URL);
+    const media = createMediaCache(env.MUSIC_MEDIA_BASE_URL, extractExec);
     const controls = new Map();
     const messages = new Map();
     const panels = new Map();
@@ -128,7 +129,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             const track = await directProviderTrack(node, url, requester, extractor, extractExec,
                 media.load, info, media.loadHls,
                 { preferDirect: !embedded && isLoopbackNode(node), cacheOnly, signal });
-            if (!track && !signal?.aborted) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
+            if (!track && !cacheOnly && !signal?.aborted) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
             if (!signal?.aborted) warn(`yt-dlp ${provider}: ${ytDlpErrorDetail(error)}`, error);
@@ -326,6 +327,18 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         const node = nodeFor(guildId);
         const requester = { id: userId };
         const input = checkedQuery(query, mediaHosts);
+        if (input instanceof URL && isDirectMediaUrl(input, mediaHosts)) {
+            if (media.filesEnabled) {
+                const filename = input.pathname.split("/").at(-1);
+                let title = filename;
+                try { title = decodeURIComponent(filename); } catch { /* Keep the encoded filename. */ }
+                const reference = { kind: "link", title: title || "Media file", url: input.href, source: "http" };
+                return { tracks: [unresolved(reference, userId)] };
+            }
+            if (!nativeMediaExtension.test(input.pathname)) {
+                throw new MusicError("This file needs FFmpeg and a configured media server. Ask the bot operator to enable file conversion.");
+            }
+        }
         return audioStage(parent || shutdown.signal, lookupBudget, async signal => {
             let result;
             try {
@@ -382,16 +395,36 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             for (let phase; (phase = plan.phases.shift());) {
                 signal.throwIfAborted();
                 if (phase === "native") {
-                    if (candidate?.encoded && !candidate.userData?.musicExtracted) return candidate;
-                    let match;
-                    if (reference.kind === "match") {
+                    let match = candidate?.encoded && !candidate.userData?.musicExtracted ? candidate : null;
+                    if (!match && reference.kind === "match") {
                         match = await matchTrack(node, reference, requester, undefined, undefined, signal);
-                    } else if (!candidate) {
-                        const result = await searchTracks(node, reference.url, requester, { mediaHosts, signal }).catch(() => null);
-                        match = result?.tracks[0];
+                    } else if (!match && !candidate) {
+                        const url = checkedQuery(reference.url, mediaHosts);
+                        if (media.filesEnabled && url instanceof URL && isDirectMediaUrl(url, mediaHosts)) {
+                            match = await audioStage(signal, 14_000, child => media.loadFile(node, url, requester, child)).catch(error => {
+                                if (!signal.aborted) warn("Decode media file", error);
+                                return null;
+                            });
+                            if (match) {
+                                Object.assign(match.info, { title: reference.title, uri: reference.url });
+                                match.userData = { ...match.userData, musicExtracted: true };
+                            } else if (!nativeMediaExtension.test(url.pathname)) {
+                                return null;
+                            }
+                        }
+                        if (!match) {
+                            const result = await searchTracks(node, reference.url, requester, { mediaHosts, signal }).catch(() => null);
+                            match = result?.tracks[0];
+                        }
                     }
                     if (match) {
                         plan.candidate = match;
+                        // A YouTube search result can load successfully even when the plugin cannot fetch its audio.
+                        if (extractor && env.MUSIC_MEDIA_BASE_URL && !embedded && isLoopbackNode(node) &&
+                            match.info.sourceName === "youtube" && !match.info.isStream) {
+                            const cached = await providerTrack(node, match.info.uri, requester, match.info, signal, true);
+                            if (cached) return cached;
+                        }
                         return match;
                     }
                 } else if (phase === "extract") {

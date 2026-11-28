@@ -68,10 +68,10 @@ test("dumb terminals use plain logs and interrupted startup never prints a succe
     assert.match(out.output, /SUCCESS\s+\[Shutdown\] Services closed/);
 });
 
-test("the Render launcher uses the original service log format without a dashboard", () => {
+test("Render logs align startup and runtime status rows with optional ANSI colors", () => {
     const out = capture(true);
     const err = capture(true);
-    const terminal = createTerminal({ out, err, env: { BAUAA_RENDER_LOGS: "1" } });
+    const terminal = createTerminal({ out, err, env: { BAUAA_RENDER_LOGS: "1", BAUAA_RENDER_COLOR: "1" }, now: () => 0 });
     terminal.begin("all");
     terminal.stage("lavalink", "skipped", "Managed by the host");
     terminal.stage("http", "working", "Opening the HTTP listener");
@@ -82,20 +82,26 @@ test("the Render launcher uses the original service log format without a dashboa
     terminal.stage("audio", "ready", "Authenticated audio session");
     terminal.complete(metrics);
     terminal.log({ level: "SUCCESS", component: "Music", message: "Lavalink primary connected" });
+    terminal.log({ level: "WARNING", component: "Lavalink JVM", message: "Playback will retry" });
     terminal.beginShutdown("SIGTERM · closing connections");
     terminal.finishShutdown(true, "Cleanup finished");
-    assert.equal(err.output, "");
-    assert.equal(out.output, [
-        `[BauaaCore] INFO v${version} · role all`,
-        "[HTTP] READY Port 10000 · /health · /ready",
-        "[MongoDB] WAIT Connecting and checking indexes",
-        "[MongoDB] READY Connected to smoke",
-        "[Discord] READY BauaaCore online",
-        "[Music] Lavalink primary connected",
-        "[Shutdown] INFO SIGTERM · closing connections",
-        "[Shutdown] INFO Cleanup finished",
-        "",
-    ].join("\n"));
+    assert.match(out.output, /\x1b\[32m/);
+    assert.doesNotMatch(out.output + err.output, /\r|\x1b\[2K/);
+    const [banner, ...rows] = stripVTControlCharacters(out.output).trimEnd().split("\n");
+    assert.equal(banner, `🚀 BauaaCore · v${version} · role all`);
+    const split = [...rows, stripVTControlCharacters(err.output).trimEnd()].map(line => line.split(" │ "));
+    assert.ok(split.every(row => row.length === 3 && stringWidth(row[0]) === 15 && stringWidth(row[1]) === 16));
+    const details = split.map(row => row.map(cell => cell.trim()).join(" / "));
+    assert.ok(details.includes("⏳ STARTING / MongoDB / Connecting and checking indexes"));
+    assert.ok(details.includes("✅ READY / Audio Node / Authenticated audio session"));
+    assert.ok(details.some(row => row.startsWith("✅ READY / Startup / Startup complete · Bauaa界 · Servers 3 · Commands 12")));
+    assert.ok(details.includes("🟠 WARN / Lavalink JVM / Playback will retry"));
+    assert.ok(details.includes("✅ READY / Shutdown / Cleanup finished (0ms)"));
+
+    const plain = capture(false);
+    createTerminal({ out: plain, err: plain, env: { RENDER: "true", BAUAA_ASCII: "1", NO_COLOR: "1", BAUAA_RENDER_COLOR: "1" } }).begin("general");
+    assert.match(plain.output, /STATUS\s+\| SERVICE\s+\| DETAILS/);
+    assert.doesNotMatch(plain.output, /\x1b|[^\x00-\x7f]/);
 });
 
 test("logging redacts credential values, URLs, auth headers, and terminal control codes", () => {

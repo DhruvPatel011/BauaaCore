@@ -24,8 +24,13 @@ const palettes = {
 };
 const logColors = { INFO: "cyan", SUCCESS: "green", WARNING: "amber", ERROR: "red", DEBUG: "gray" };
 const logIcons = { INFO: "›", SUCCESS: "✓", WARNING: "!", ERROR: "×", DEBUG: "·" };
-const renderLevels = { SUCCESS: "READY", WARNING: "WARN", DEBUG: "INFO" };
-const renderComponents = { "HTTP Server": "HTTP", "Discord Gateway": "Discord", "Audio Node": "Lavalink" };
+const renderLevels = {
+    INFO: ["🔹", "INFO", "cyan"], WAIT: ["⏳", "STARTING", "purple"],
+    SUCCESS: ["✅", "READY", "green"], WARNING: ["🟠", "WARN", "amber"],
+    ERROR: ["🔴", "ERROR", "red"], DEBUG: ["▫️", "DEBUG", "gray"], SKIP: ["➖", "SKIPPED", "gray"],
+};
+const renderStatusWidth = 15;
+const renderServiceWidth = 16;
 const states = {
     ready: ["✓", "+", "green", "Ready"],
     skipped: ["−", "-", "gray", "Skipped"],
@@ -65,6 +70,10 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
     const displayText = text => unicode ? text : text.normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^\x20-\x7e]/gu, "?");
     const graphemes = new Intl.Segmenter();
     const separator = unicode ? " · " : " | ";
+    const renderDivider = unicode ? " │ " : " | ";
+    const renderPad = (text, size) => text + " ".repeat(Math.max(0, size - stringWidth(text)));
+    const renderPaint = (text, tone) => env.BAUAA_RENDER_COLOR === "1" && !env.NO_COLOR && env.FORCE_COLOR !== "0"
+        ? sgr(text, palettes.standard[tone]) : text;
     const rows = new Map(Object.keys(services).map(id => [id, { state: "pending" }]));
     let role;
     let phase = "idle";
@@ -148,11 +157,10 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         const stream = level === "WARNING" || level === "ERROR" ? err : out;
         const detail = displayText(message);
         if (render) {
-            const label = renderComponents[component] || component;
-            const status = renderLevels[level] || level;
-            const prefix = component === "Application" ? "" :
-                component === "Music" && (level === "INFO" || level === "SUCCESS") ? "[Music] " : `[${label}] ${status} `;
-            stream.write(`${prefix}${detail}\n`);
+            const [icon, status, tone] = renderLevels[level] || renderLevels.INFO;
+            const badge = renderPad(unicode ? `${icon} ${status}` : status, renderStatusWidth);
+            const label = renderPad(displayText(component), renderServiceWidth);
+            stream.write(`${renderPaint(badge, tone)}${renderDivider}${label}${renderDivider}${detail}\n`);
             return;
         }
         clearLine();
@@ -171,8 +179,12 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         if (phase !== "idle") return;
         role = instanceRole;
         phase = "startup";
-        if (!interactive()) {
-            log({ level: "INFO", component: "BauaaCore", message: `v${version}${render ? separator : " | "}role ${role}` });
+        if (render) {
+            const banner = `${unicode ? "🚀 " : ""}BauaaCore${separator}v${version}${separator}role ${role}`;
+            const header = [renderPad("STATUS", renderStatusWidth), renderPad("SERVICE", renderServiceWidth), "DETAILS"].join(renderDivider);
+            out.write(`${renderPaint(banner, "cyan")}\n${renderPaint(header, "gray")}\n`);
+        } else if (!interactive()) {
+            log({ level: "INFO", component: "BauaaCore", message: `v${version} | role ${role}` });
         } else {
             const name = width() >= 57
                 ? art.map((line, index) => `  ${gradient(line.trimEnd(), index)}`).join("\n")
@@ -189,14 +201,9 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         if (settled.has(state) && row.started !== undefined) row.elapsed = now() - row.started;
         row.state = state;
         row.detail = detail;
-        if (render) {
-            if (state === "skipped" || (id === "http" && state === "working") || (id === "audio" && state === "ready")) return true;
-            const level = state === "working" ? "WAIT" : state === "ready" ? "SUCCESS" : state === "warning" ? "WARNING" : "ERROR";
-            log({ level, component: services[id], message: detail });
-            return true;
-        }
-        if (!interactive() || state === "failed" || state === "warning") {
-            const level = state === "ready" ? "SUCCESS" : state === "failed" ? "ERROR" : state === "warning" ? "WARNING" : "INFO";
+        if (render || !interactive() || state === "failed" || state === "warning") {
+            const level = state === "ready" ? "SUCCESS" : state === "failed" ? "ERROR" : state === "warning" ? "WARNING" :
+                render && state === "working" ? "WAIT" : render && state === "skipped" ? "SKIP" : "INFO";
             const timing = row.elapsed === undefined ? "" : ` (${duration(row.elapsed)})`;
             log({ level, component: services[id], message: `${detail || states[state][3]}${timing}` });
         } else {
@@ -237,7 +244,6 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
         if (phase !== "startup" || [...rows.values()].some(row => !settled.has(row.state))) return;
         phase = "running";
         stopAnimation();
-        if (render) return;
         const attention = [...rows.values()].some(row => ["warning", "failed"].includes(row.state));
         const title = attention ? "Startup complete with warnings" : "Startup complete";
         const bot = displayText(metrics.bot);
@@ -246,6 +252,12 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
             `Servers   ${metrics.servers}`.padEnd(24) + `Commands  ${metrics.commands}`,
             `HTTP      ${metrics.port}`.padEnd(24) + `Audio     ${metrics.audio}`,
         ];
+        if (render) {
+            log({ level: attention ? "WARNING" : "SUCCESS", component: "Startup", message:
+                [title, bot, `Servers ${metrics.servers}`, `Commands ${metrics.commands}`, `HTTP ${metrics.port}`,
+                    `Audio ${metrics.audio}`, `Uptime ${duration(uptime())}`].join(separator) });
+            return;
+        }
         if (!interactive()) {
             log({ level: attention ? "WARNING" : "SUCCESS", component: "Startup",
                 message: `${title} (100%) | ${bot} | ${details.map(line => line.trim().replace(/ {2,}/g, " ")).join(" | ")}` });
@@ -283,8 +295,8 @@ function createTerminal({ out = process.stdout, err = process.stderr, env = proc
     function finishShutdown(success, message) {
         phase = "stopped";
         stopAnimation();
-        const elapsed = render || shutdownAt === undefined ? "" : ` (${duration(now() - shutdownAt)})`;
-        log({ level: success ? (render ? "INFO" : "SUCCESS") : "ERROR", component: "Shutdown", message: `${message}${elapsed}` });
+        const elapsed = shutdownAt === undefined ? "" : ` (${duration(now() - shutdownAt)})`;
+        log({ level: success ? "SUCCESS" : "ERROR", component: "Shutdown", message: `${message}${elapsed}` });
     }
 
     return { begin, stage, log, complete, abort, beginShutdown, finishShutdown };

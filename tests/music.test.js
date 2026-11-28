@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const { EventEmitter, once } = require("node:events");
+const { readFile } = require("node:fs/promises");
 const { createRequire } = require("node:module");
 const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, Collection, MessageFlags, PermissionsBitField } = require("discord.js");
@@ -153,6 +154,10 @@ test("Spotify’s public embed yields ordered metadata and matching rejects a di
     assert.equal(await matchTrack(node, result.tracks[0], { id: userId }), correct);
     assert.equal(checkedQuery(`spotify:playlist:${spotifyId}`).href, `https://open.spotify.com/playlist/${spotifyId}`);
     assert.equal(checkedQuery("https://audio.example/song.mp3", ["audio.example"]).hostname, "audio.example");
+    assert.equal(checkedQuery("https://audio.example/download?id=12", ["audio.example"]).pathname, "/download");
+    assert.equal(checkedQuery("//audio.example/video.mov", ["audio.example"]).href, "https://audio.example/video.mov");
+    assert.equal(checkedQuery("https://cdn.discordapp.com/attachments/123/456/My%20Video.mkv?ex=123").pathname.split("/").at(-1), "My%20Video.mkv");
+    assert.equal(checkedQuery("https://archive.org/download/example/clip.mov").hostname, "archive.org");
     for (const url of ["http://127.0.0.1/audio.mp3", "file:///music.mp3", "https://youtube.com.fake.test/file.mp3", "https://evil@youtube.com/file.mp3"]) {
         assert.throws(() => checkedQuery(url), /supported streaming link/);
     }
@@ -245,6 +250,42 @@ test("audio fallback serves private links and byte ranges for Lavalink seeking",
         return { tracks: [{ encoded: "converted-audio" }] };
     } }, hls, { id: userId });
     assert.deepEqual(converted, { encoded: "converted-audio" });
+});
+
+test("uploaded and linked media is decoded from a seekable file with restricted FFmpeg input", async t => {
+    const input = Buffer.from("test video bytes");
+    const audio = Buffer.alloc(2048);
+    let media;
+    let decoded = 0;
+    const server = http.createServer((req, res) => {
+        if (req.url === "/clip.mov") return res.end(input);
+        if (req.url === "/redirect") return res.writeHead(302, { Location: "/clip.mov" }).end();
+        if (req.url === "/large.mkv") return res.writeHead(200, { "Content-Length": 65 * 1024 ** 2 }).end();
+        if (!media.handleHttp(req, res)) res.writeHead(404).end();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(() => server.close());
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    media = createMediaCache(origin, async (binary, args) => {
+        decoded++;
+        assert.equal(binary, "ffmpeg");
+        assert.deepEqual(await readFile(args[args.indexOf("-i") + 1]), input);
+        assert.equal(args[args.indexOf("-protocol_whitelist") + 1], "file,pipe");
+        assert.doesNotMatch(args[args.indexOf("-format_whitelist") + 1], /concat|hls|dash/);
+        assert.equal(args[args.indexOf("-map") + 1], "0:a:0");
+        return { stdout: audio };
+    });
+    const node = { async search({ query }) {
+        const response = await fetch(query);
+        assert.equal(response.headers.get("content-type"), "audio/ogg");
+        assert.deepEqual(Buffer.from(await response.arrayBuffer()), audio);
+        return { tracks: [{ encoded: "converted-file" }] };
+    } };
+    assert.equal((await media.loadFile(node, `${origin}/clip.mov`, { id: userId })).encoded, "converted-file");
+    await assert.rejects(media.loadFile(node, `${origin}/redirect`, { id: userId }));
+    assert.equal(await media.loadFile(node, `${origin}/large.mkv`, { id: userId }), null);
+    assert.equal(decoded, 1);
 });
 
 test("YouTube playback reuses search metadata and still supports direct streams without a cache", async () => {
@@ -523,6 +564,8 @@ test("music controls update one public panel without routine replies and preserv
     let stallYouTube = false;
     let allowProgress = true;
     let session = "lavalink-session";
+    const cachedAudioOrigin = "http://127.0.0.1:10000";
+    const audioLoads = [];
     const resumeHeaders = [];
     const progress = () => send({ op: "playerUpdate", guildId, state: { time: Date.now(), position: 650, connected: true, ping: 1 } });
     const send = event => connection.send(JSON.stringify(event));
@@ -542,6 +585,10 @@ test("music controls update one public panel without routine replies and preserv
         ]));
         if (url.pathname === "/v4/loadtracks") {
             const identifier = url.searchParams.get("identifier");
+            if (identifier.startsWith(`${cachedAudioOrigin}/music/audio/`)) {
+                audioLoads.push(identifier);
+                return res.end(JSON.stringify({ loadType: "track", data: extracted }));
+            }
             if (identifier.startsWith("ytsearch:")) {
                 const data = identifier === "ytsearch:Second song" ? tracks.slice(1) : tracks;
                 return res.end(JSON.stringify({ loadType: "search", data }));
@@ -763,8 +810,47 @@ test("music controls update one public panel without routine replies and preserv
     assert.equal(soundCloudLink.deleted, true);
     assert.equal(music.playerFor(guildId).queue.current?.info.sourceName, "soundcloud");
 
+    await music.close();
+    await t.test("local YouTube playback uses cached audio before the native plugin", async t => {
+        let cacheAvailable = true;
+        const local = installMusic(client, {
+            data: { settings: async () => settings }, env: { ...env, MUSIC_MEDIA_BASE_URL: cachedAudioOrigin },
+            async extractExec(_, args, { encoding }) {
+                assert.equal(args.at(-1), tracks[0].info.uri);
+                assert.equal(encoding, "buffer");
+                return { stdout: Buffer.alloc(cacheAvailable ? 2048 : 0) };
+            },
+        });
+        t.after(() => local.close());
+        await local.start();
+        await waitFor(() => local.audioStatus() === "connected");
+        const attachment = "https://cdn.discordapp.com/attachments/123/456/My%20Video.mkv?ex=123";
+        const [file] = (await local.lookup(guildId, attachment, userId)).tracks;
+        assert.equal(file.info.title, "My Video.mkv");
+        assert.equal(file.info.uri, attachment);
+        assert.equal(local.storeTrack(file), null);
+        failYouTube = true;
+        const command = local.commands.find(item => item.data.name === "play");
+        const play = interaction({ query: "First song" });
+        await command.execute(play);
+        assert.equal(play.deleted, true);
+        assert.equal(audioLoads.length, 1);
+        assert.equal(current.encoded, extracted.encoded);
+        assert.equal(local.playerFor(guildId).queue.current.info.sourceName, "youtube");
+        assert.equal(local.playerFor(guildId).queue.current.info.uri, tracks[0].info.uri);
+
+        end();
+        await waitFor(() => !local.playerFor(guildId)?.queue.current);
+        cacheAvailable = false;
+        failYouTube = false;
+        const fallback = interaction({ query: tracks[0].info.uri });
+        await command.execute(fallback);
+        assert.equal(fallback.deleted, true);
+        assert.equal(audioLoads.length, 1);
+        assert.equal(current.encoded, tracks[0].encoded);
+    });
+
     await t.test("hosted play prepares the match before a native stall and reports a late failure only once", async t => {
-        await music.close();
         const calls = [];
         let blockSearch = false;
         let canceled = false;

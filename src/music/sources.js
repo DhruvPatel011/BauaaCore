@@ -8,10 +8,11 @@ const publicSources = [
     "youtube.com", "youtu.be", "soundcloud.com", "spotify.com", "spotify.link", "spoti.fi",
     "music.apple.com", "itunes.apple.com", "deezer.com", "deezer.page.link", "tidal.com", "qobuz.com",
     "jiosaavn.com", "kuwo.cn", "bandcamp.com", "twitch.tv", "vimeo.com", "bandcampcdn.com",
-    "cdn.discordapp.com", "media.discordapp.net", "archive.org", "upload.wikimedia.org", "samplelib.com",
 ];
-const directSources = ["cdn.discordapp.com", "media.discordapp.net", "archive.org", "upload.wikimedia.org", "samplelib.com"];
-const mediaExtension = /\.(?:mp3|m4a|aac|ogg|opus|oga|flac|wav|mp4|webm|aiff|wma)$/i;
+const discordMedia = ["cdn.discordapp.com", "media.discordapp.net"];
+const directSources = [...discordMedia, "archive.org", "upload.wikimedia.org", "samplelib.com"];
+const nativeMediaExtension = /\.(?:mp3|m4a|aac|ogg|opus|oga|flac|wav|mp4|webm|aiff|wma)$/i;
+const otherMediaExtension = /\.(?:3g2|3gp|ac3|aif|amr|ape|au|avi|caf|dts|eac3|f4a|f4v|flv|gsm|m2ts|m4b|m4v|mka|mkv|mov|mp2|mpe?g|mts|mxf|ogv|ra|rm|rmvb|ts|tta|voc|w64|wmv|wv)$/i;
 const spotifyPath = /^\/(?:intl-[a-z-]+\/)?(?:embed\/)?(track|album|playlist|artist)\/([A-Za-z0-9]{22})\/?$/;
 const searchSources = ["ytsearch", "scsearch"];
 const execute = promisify(execFile);
@@ -24,6 +25,10 @@ function isSource(host, domains) {
     return domains.some(domain => host === domain || host.endsWith(`.${domain}`));
 }
 
+function isDirectMediaUrl(url, trusted = []) {
+    return isSource(url.hostname, directSources) || trusted.includes(url.hostname);
+}
+
 function checkedQuery(input, trusted = []) {
     const query = input.trim();
     if (!query || query.length > 2000) throw new MusicError("Enter a song name or a valid audio link.");
@@ -34,16 +39,19 @@ function checkedQuery(input, trusted = []) {
     if (!/^[a-z][a-z\d+.-]*:\/\/|^www\.|^\/\//i.test(query)) return query;
     let url;
     try {
-        url = new URL(query.startsWith("www.") ? `https://${query}` : query);
+        const address = /^www\./i.test(query) ? `https://${query}` : query.startsWith("//") ? `https:${query}` : query;
+        url = new URL(address);
     } catch {
         throw new MusicError("Enter a valid HTTP or HTTPS music link.");
     }
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.port ||
         isIP(url.hostname.replace(/^\[|\]$/g, "")) || !url.hostname.includes(".") ||
-        (!isSource(url.hostname, publicSources) && !trusted.includes(url.hostname))) {
-        throw new MusicError("Use a supported streaming link or upload the audio with `/playfile`. An operator can enable more media hosts.");
+        (!isSource(url.hostname, publicSources) && !isDirectMediaUrl(url, trusted))) {
+        throw new MusicError("Use a supported streaming link or upload a media file with `/playfile`. An operator can enable more media hosts.");
     }
-    if ((directSources.includes(url.hostname) || trusted.includes(url.hostname)) && !mediaExtension.test(url.pathname)) {
+    const attachment = discordMedia.includes(url.hostname) && /^\/(?:ephemeral-)?attachments\//.test(url.pathname);
+    if (isDirectMediaUrl(url, trusted) && !attachment && !trusted.includes(url.hostname) &&
+        !nativeMediaExtension.test(url.pathname) && !otherMediaExtension.test(url.pathname)) {
         throw new MusicError("Use a direct media file link or upload the file with `/playfile`.");
     }
     return url;
@@ -279,12 +287,13 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
 }
 
 function storeTrack(track) {
-    if (track.userData?.musicReference) return track.userData.musicReference;
+    const reference = track.userData?.musicReference;
     const { title, author, uri, duration, sourceName } = track.info;
-    if (sourceName === "http" && uri) {
-        const parsed = new URL(uri);
-        if (["cdn.discordapp.com", "media.discordapp.net"].includes(parsed.hostname) && parsed.searchParams.has("ex")) return null;
+    if ((reference?.source || sourceName) === "http" && (reference?.url || uri)) {
+        const parsed = new URL(reference?.url || uri);
+        if (discordMedia.includes(parsed.hostname) && parsed.searchParams.has("ex")) return null;
     }
+    if (reference) return reference;
     if (!uri || sourceName === "flowery-tts") return null;
     return { kind: "link", title, author, url: uri, duration, source: sourceName };
 }
@@ -347,5 +356,5 @@ async function searchTracks(node, input, requester, options = {}) {
     return { tracks: (result.tracks || []).slice(0, TRACK_LIMIT), name: result.playlist?.title, playlist: result.loadType === "playlist" };
 }
 
-module.exports = { checkedQuery, customHosts, parseSpotifyEmbed, spotifyItem, matchTrack, matchSoundCloudTrack,
+module.exports = { checkedQuery, customHosts, isDirectMediaUrl, nativeMediaExtension, parseSpotifyEmbed, spotifyItem, matchTrack, matchSoundCloudTrack,
     storeTrack, searchTracks, streamProvider, directProviderTrack, extractSearch };

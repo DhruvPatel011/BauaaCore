@@ -1,5 +1,11 @@
 const { execFile } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
+const { createWriteStream } = require("node:fs");
+const { mkdtemp, rm, rmdir } = require("node:fs/promises");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const { Transform } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 const { promisify } = require("node:util");
 const { ytDlpOptions } = require("./shared");
 const { loadTracks } = require("./audioDeadline");
@@ -7,8 +13,15 @@ const { loadTracks } = require("./audioDeadline");
 const execute = promisify(execFile);
 const maxTrackBytes = 16 * 1024 * 1024;
 const maxCacheBytes = 32 * 1024 * 1024;
+const maxFileBytes = 64 * 1024 * 1024;
 const format = "bestaudio[protocol=https][ext=webm]/bestaudio[protocol=https][ext=m4a]";
 const mediaPrefix = "/music/audio/";
+// Self-contained containers only. Playlist demuxers can open secondary inputs.
+const fileDemuxers = ["aac", "ac3", "aiff", "amr", "amrnb", "amrwb", "ape", "asf", "au", "avi", "caf", "dts", "dtshd",
+    "eac3", "flac", "flv", "gsm", "matroska", "webm", "mov", "mp4", "m4a", "3gp", "3g2", "mj2", "mp3", "mpeg", "mpegts",
+    "mpegtsraw", "mxf", "ogg", "rm", "tta", "voc", "w64", "wav", "wv"].join(",");
+const opusOutput = ["-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", "libopus", "-application", "audio", "-compression_level", "0",
+    "-threads", "1", "-b:a", "96k", "-f", "ogg", "pipe:1"];
 
 function createMediaCache(address, exec = execute) {
     const audio = new Map();
@@ -25,14 +38,19 @@ function createMediaCache(address, exec = execute) {
         }
     }
 
-    async function cacheAudio(node, requester, command, args, fixedExtension, signal) {
+    async function renderAudio(command, args, signal) {
+        const { stdout } = await exec(command, args, {
+            timeout: 12_000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true, signal,
+        });
+        return stdout;
+    }
+
+    async function cacheAudio(node, requester, makeAudio, fixedExtension, signal) {
         if (!origin || busy || signal?.aborted) return null;
         busy = true;
         try {
-            const { stdout } = await exec(command, args, {
-                timeout: 12_000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true, signal,
-            });
-            if (signal?.aborted || !Buffer.isBuffer(stdout) || stdout.length < 1024) return null;
+            const stdout = await makeAudio();
+            if (signal?.aborted || !Buffer.isBuffer(stdout) || stdout.length < 1024 || stdout.length > maxTrackBytes) return null;
             for (const [id, entry] of audio) if (entry.expires <= Date.now()) remove(id);
             while (bytes + stdout.length > maxCacheBytes && audio.size) remove(audio.keys().next().value);
             const id = randomBytes(18).toString("base64url");
@@ -52,17 +70,44 @@ function createMediaCache(address, exec = execute) {
 
     function load(node, input, requester, binary, signal) {
         const args = [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input];
-        return cacheAudio(node, requester, binary, args, undefined, signal);
+        return cacheAudio(node, requester, () => renderAudio(binary, args, signal), undefined, signal);
     }
 
     function loadHls(node, input, requester, signal) {
         // Decode AAC here because the native SoundCloud source and Lavalink's
         // AAC decoder do not handle every HLS rendition. Fast Opus encoding
         // fits the hosted CPU budget better than a complete MP3 transcode.
-        return cacheAudio(node, requester, "ffmpeg", ["-nostdin", "-loglevel", "error", "-xerror", "-rw_timeout", "4000000",
+        const args = ["-nostdin", "-loglevel", "error", "-xerror", "-rw_timeout", "4000000",
             "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "1",
-            "-protocol_whitelist", "https,tls,tcp,crypto", "-i", input, "-map", "0:a:0", "-c:a", "libopus", "-application", "audio",
-            "-compression_level", "0", "-threads", "1", "-b:a", "96k", "-f", "ogg", "pipe:1"], "opus", signal);
+            "-protocol_whitelist", "https,tls,tcp,crypto", "-i", input, ...opusOutput];
+        return cacheAudio(node, requester, () => renderAudio("ffmpeg", args, signal), "opus", signal);
+    }
+
+    function loadFile(node, url, requester, signal) {
+        return cacheAudio(node, requester, async () => {
+            const directory = await mkdtemp(join(tmpdir(), "bauaa-media-"));
+            const input = join(directory, "media");
+            try {
+                const response = await fetch(url, { redirect: "error", signal });
+                if (!response.ok || !response.body || Number(response.headers.get("content-length")) > maxFileBytes) {
+                    await response.body?.cancel();
+                    return null;
+                }
+                let downloaded = 0;
+                const limit = new Transform({ transform(chunk, _, done) {
+                    downloaded += chunk.length;
+                    if (downloaded > maxFileBytes) return done(new Error("Media file exceeds 64 MiB."));
+                    done(null, chunk);
+                } });
+                await pipeline(response.body, limit, createWriteStream(input, { flags: "wx", mode: 0o600 }), { signal });
+                // A seekable input also handles MP4 and MOV files with metadata at the end.
+                return await renderAudio("ffmpeg", ["-nostdin", "-loglevel", "error", "-xerror",
+                    "-protocol_whitelist", "file,pipe", "-format_whitelist", fileDemuxers, "-i", input, ...opusOutput], signal);
+            } finally {
+                await rm(input, { force: true });
+                await rmdir(directory);
+            }
+        }, "opus", signal);
     }
 
     function remove(id) {
@@ -108,7 +153,7 @@ function createMediaCache(address, exec = execute) {
         return !id || audio.get(id)?.expires > Date.now();
     }
 
-    return { load, loadHls, handleHttp, isAvailable };
+    return { load, loadFile, loadHls, handleHttp, isAvailable, filesEnabled: Boolean(origin) };
 }
 
 module.exports = { createMediaCache };

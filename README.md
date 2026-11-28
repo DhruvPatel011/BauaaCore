@@ -235,7 +235,7 @@ Join a voice channel and run `/play query:<song name or URL>`. Once BauaaCore is
 
 | Commands | What they do |
 |---|---|
-| `/play`, `/search`, `/playfile` | Queue a supported song or playlist, pick a search result, or play an uploaded file |
+| `/play`, `/search`, `/playfile` | Queue a song, playlist, or direct media link, pick a search result, or play audio from a file upload |
 | `/nowplaying`, `/connect`, `/disconnect` | Find the controller or manage the voice connection |
 | `/pause`, `/resume`, `/skip`, `/previous`, `/replay`, `/stop` | Control playback. `/stop` clears the queue. |
 | `/seek`, `/volume`, `/loop`, `/autoplay` | Set the playback position, volume, repeat mode, or recommendations |
@@ -250,6 +250,8 @@ Join a voice channel and run `/play query:<song name or URL>`. Once BauaaCore is
 | `/music help` | Browse the interactive music command guide |
 
 `/play` accepts YouTube videos and playlists, public Spotify links, and sources available on your Lavalink node. Public Spotify links use visible tracks from Spotify’s embed and match them to audio from another source. Private playlists, generated mixes, and tracks beyond the embed’s list may be unavailable. Playback depends on source availability and the audio node’s configuration.
+
+Use `/playfile` for a Discord attachment or `/play` for a direct media URL. BauaaCore plays the first audio stream from the file. Supported formats include MP3, WAV, FLAC, AAC, M4A, Ogg, Opus, AIFF, WMA, MP4, MOV, MKV, WebM, AVI, WMV, FLV and MPEG transport streams. File conversion accepts up to 64 MiB of input and requires a self-contained file with a decodable audio stream. Add a custom direct-file hostname to `MUSIC_MEDIA_HOSTS` to play files from that host, including direct download URLs with no file extension.
 
 ### Command Interface
 
@@ -348,6 +350,7 @@ Set any of these options in `.env` to customize the console.
 | `BAUAA_ASCII=1` | Use ASCII characters for the spinner, status indicators, and borders. |
 | `BAUAA_PLAIN=1` | Disable colors, animations, and the dashboard layout. Redirected output automatically uses plain text. |
 | `BAUAA_VERBOSE=1` | Show debug messages and captured Lavalink output in the terminal. |
+| `BAUAA_RENDER_COLOR=1` | Add ANSI colors to severity labels in Render logs. The default layout uses colored status emoji and fixed-width columns. |
 | `BAUAA_LOG_DIR` | Store diagnostic files in this directory. Defaults to `music-node/logs`. |
 
 The local console displays connection failures and errors as they occur. Routine application diagnostics go to `application.ndjson`, and output from a locally launched Lavalink process goes to `lavalink.ndjson`. Each file rotates at 2 MiB and retains one previous file.
@@ -361,13 +364,13 @@ Configure these settings in `.env` to enable music.
 | `LAVALINK_URL` | Origin of the audio node. Defaults to `http://127.0.0.1:2333`. |
 | `LAVALINK_PASSWORD` | A long random password shared by BauaaCore and Lavalink. |
 | `MUSIC_YTDLP_PATH` | Path to the optional `yt-dlp` executable on the bot host. Use `yt-dlp` if it is on `PATH`. |
-| `MUSIC_MEDIA_BASE_URL` | Optional bot HTTP origin reachable from Lavalink for audio fallback. Use `http://127.0.0.1:10000` for a native local node or `http://host.docker.internal:10000` for Docker Desktop with `PORT=10000`. |
-| `MUSIC_MEDIA_HOSTS` | Optional comma-separated hostnames for trusted public audio file URLs. |
+| `MUSIC_MEDIA_BASE_URL` | Bot HTTP origin reachable from Lavalink for file conversion and audio fallback. The Windows launcher uses local `PORT` by default. For Docker Desktop with `PORT=10000`, set `http://host.docker.internal:10000`. |
+| `MUSIC_MEDIA_HOSTS` | Optional comma-separated hostnames for trusted public audio and video file URLs. |
 | `LAVALINK_URL_BACKUP`, `LAVALINK_PASSWORD_BACKUP` | Optional second audio node for `/switchaudionode`. |
 
 For YouTube audio resolution, install [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) and Node.js 22 or newer on the bot host. Run BauaaCore and Lavalink on the same internet connection because YouTube can bind stream URLs to the origin IP. The optional audio cache holds up to 32 MiB and accepts tracks up to 16 MiB each.
 
-SoundCloud's HLS audio fallback needs FFmpeg with the `libopus` encoder. The Windows launcher also looks for a portable copy at `.tools/ffmpeg/bin/ffmpeg.exe` when FFmpeg is unavailable on `PATH`. The combined Render image includes FFmpeg.
+File conversion and SoundCloud’s HLS audio fallback use FFmpeg with the `libopus` encoder. The Windows launcher also looks for a portable copy at `.tools/ffmpeg/bin/ffmpeg.exe` when FFmpeg is unavailable on `PATH`. The combined Render image includes FFmpeg.
 
 From the repository root, start the included node with Docker Compose.
 
@@ -393,6 +396,8 @@ In the existing Render web service, open **Settings → Build → Source → Edi
 By default the image starts BauaaCore in the `all` role on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
 Keep one instance responsible for music for this bot token. Stop any local `all` or `music` instance before using the combined service. Leave `BAUAA_INSTANCE_ROLE` unset or set it to `all` for this configuration. On startup, `/ready` waits for the first authenticated Lavalink connection. `/health` reports the current connection status. Point Render's HTTP health check to the bot's `/ready` on `PORT`. The embedded Lavalink API stays on authenticated loopback port `2333`.
+
+Render’s Logs page shows status, service and details columns for startup, runtime events and shutdown. The startup summary includes the bot identity, server and command counts, HTTP port, audio status and uptime. Set `BAUAA_VERBOSE=1` in Render’s environment to include debug output.
 
 After deployment, check for `Lavalink primary connected` and the Lavalink and YouTube plugin versions in Render's logs. Join a Discord voice channel and run `/play` with `Husn Anuv Jain`, then with `https://www.youtube.com/watch?v=gJLVTKhTnog` and `https://soundcloud.com/anuvjainjatt/husn`. Listen for audio, run `/debug` twice to check that the position advances, and look for `TrackStart` and `Playback advancing` in the logs. Queue a second song while one is playing and test `/queue`, `/pause`, `/resume`, and `/skip`.
 

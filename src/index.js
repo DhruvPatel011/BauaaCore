@@ -359,10 +359,10 @@ function completeStartup(audio) {
 
 function onNodeReady(id) {
     if (isShuttingDown) return;
-    const first = terminal.stage("audio", "ready", "Authenticated audio session");
+    const detail = renderLogs ? `Lavalink ${id} connected · authenticated audio session` : "Authenticated audio session";
+    const first = terminal.stage("audio", "ready", detail);
     if (first) completeStartup("Connected");
-    if (renderLogs) log("SUCCESS", "Music", `Lavalink ${id} connected`);
-    else if (!first) log("SUCCESS", "Audio Node", `${id} connected`);
+    else log("SUCCESS", "Audio Node", `${id} connected`);
 }
 
 function startAudio() {
@@ -396,10 +396,7 @@ function startAudio() {
 
 client.once("clientReady", async () => {
     if (isShuttingDown) return;
-    const gatewayStatus = renderLogs
-        ? `${safeText(client.user.tag)} online in ${process.uptime().toFixed(1)}s · ${client.guilds.cache.size} servers · ${client.commands.size} loaded commands`
-        : "Gateway identified";
-    terminal.stage("discord", "ready", gatewayStatus);
+    terminal.stage("discord", "ready", "Gateway identified");
     startAudio();
     if (!handlesGeneral) return;
     try {

@@ -166,6 +166,7 @@ async function start() {
     }
 
     checkingLavalink = false;
+    process.env.MUSIC_MEDIA_BASE_URL ||= `http://127.0.0.1:${process.env.PORT || "10000"}`;
     if (!automatic) process.env.BAUAA_INSTANCE_ROLE = role;
     runBot();
 }
