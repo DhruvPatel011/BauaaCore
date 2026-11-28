@@ -1,4 +1,5 @@
 const { createHash, randomUUID } = require("node:crypto");
+const { once } = require("node:events");
 const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, PermissionFlagsBits, Routes } = require("discord.js");
 const { LavalinkManager, TrackSymbol, UnresolvedTrackSymbol } = require("lavalink-client");
@@ -7,7 +8,8 @@ const { log } = require("../utils/runtimeLog");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
 const { probeLavalink } = require("./nodeReadiness");
-const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
+const { audioStage, lookupBudget, playbackBudget } = require("./audioDeadline");
+const { checkedQuery, customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack, extractSearch } = require("./sources");
 const { MusicError, TRACK_LIMIT, noMentions, trackTitle, ytDlpErrorDetail } = require("./shared");
 const { playerPanel, disconnectedPanel } = require("./panel");
 const filters = require("./filters");
@@ -75,8 +77,11 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const selections = new Map();
     const connectionErrors = new Map();
     const readyNodes = new WeakSet();
-    const trackPreparers = new WeakMap();
-    const prefetchingNodes = new WeakSet();
+    const sessions = new WeakMap();
+    const playbackPlans = new WeakMap();
+    const startingPlayers = new WeakMap();
+    const endedTracks = new WeakSet();
+    const shutdown = new AbortController();
     const manager = nodes.length ? new LavalinkManager({
         nodes: nodes.filter(node => node !== embeddedPrimary),
         sendToShard: (guildId, packet) => client.guilds.cache.get(guildId)?.shard.send(packet),
@@ -102,12 +107,12 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         return !node.options.secure && ["127.0.0.1", "localhost"].includes(node.options.host);
     }
 
-    async function providerTrack(node, url, requester, info, signal) {
+    async function providerTrack(node, url, requester, info, signal, cacheOnly = false) {
         const provider = streamProvider(url);
         try {
             const track = await directProviderTrack(node, url, requester, extractor, undefined,
-                (...args) => media.load(...args, signal), info, (...args) => media.loadHls(...args, signal),
-                { preferDirect: isLoopbackNode(node), signal });
+                media.load, info, media.loadHls,
+                { preferDirect: !embedded && isLoopbackNode(node), cacheOnly, signal });
             if (!track && !signal?.aborted) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
@@ -116,31 +121,12 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         }
     }
 
-    async function prepareAudio(resolve) {
-        if (!embedded) return resolve();
-        const controller = new AbortController();
-        const { signal } = controller;
-        let timer;
-        const timeout = new Promise(finish => {
-            timer = setTimeout(() => {
-                log("WARNING", "Music", "Audio sources did not return a playable track within 30 seconds.");
-                finish(null);
-            }, 30_000);
-        });
-        try {
-            return await Promise.race([resolve(signal), timeout]);
-        } finally {
-            clearTimeout(timer);
-            controller.abort();
-        }
-    }
-
     function playerFor(guildId) {
         return manager?.getPlayer(guildId);
     }
 
     function isReadyNode(node) {
-        return Boolean(node?.connected && node.sessionId && node.info);
+        return Boolean(node?.connected && readyNodes.has(node));
     }
 
     function availableNode() {
@@ -227,7 +213,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     }
 
     async function raw(packet) {
-        if (!manager || !["VOICE_STATE_UPDATE", "VOICE_SERVER_UPDATE", "CHANNEL_DELETE"].includes(packet.t)) return;
+        if (!manager || shutdown.signal.aborted || !["VOICE_STATE_UPDATE", "VOICE_SERVER_UPDATE", "CHANNEL_DELETE"].includes(packet.t)) return;
         const id = packet.d.guild_id;
         if (!playerFor(id) || (packet.t === "VOICE_STATE_UPDATE" && packet.d.user_id !== client.user?.id)) return;
         await serial(voiceWork, id, async () => {
@@ -248,6 +234,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                 const update = state.pending;
                 state.pending = null;
                 await manager.sendRawData(update);
+                if (playerFor(id) !== player || activeVoice.get(id) !== state) return;
                 state.ready = state.channel;
                 state.expected = null;
             }
@@ -255,6 +242,8 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     }
 
     async function join(interaction, ctx, channel = ctx.voice, moving = false) {
+        shutdown.signal.throwIfAborted();
+        ctx.audioSignal?.throwIfAborted();
         assertVoice(interaction, channel);
         let player = ctx.player;
         if (player && !moving) {
@@ -279,7 +268,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                     scheduleIdle(player, ctx.settings);
                     return player;
                 }
-                await delay(150);
+                await delay(150, undefined, { signal: ctx.audioSignal });
             }
             throw new MusicError("Discord voice did not connect in time. Check the Lavalink node and try `/connect` again.");
         } catch (error) {
@@ -288,107 +277,197 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         }
     }
 
-    async function lookup(guildId, query, userId, source) {
+    async function lookup(guildId, query, userId, source, parent) {
         const node = nodeFor(guildId);
         const requester = { id: userId };
-        try {
-            const result = await searchTracks(node, query, requester, { mediaHosts, source });
-            if (result.tracks.length || !extractor || !streamProvider(query)) return result;
-        } catch (error) {
-            if (!extractor || !streamProvider(query)) throw error;
-        }
-        const track = await prepareAudio(signal => providerTrack(node, query, requester, undefined, signal));
-        if (!track) throw new MusicError("No playable audio found for that link. Try another track or `/playfile`.");
-        return { tracks: [track] };
+        const input = checkedQuery(query, mediaHosts);
+        return audioStage(parent || shutdown.signal, lookupBudget, async signal => {
+            let result;
+            try {
+                result = await searchTracks(node, query, requester, { mediaHosts, source, signal });
+                if (result.tracks.length) return result;
+            } catch (error) {
+                if (!extractor) throw error;
+            }
+            if (!extractor) return result;
+            if (input instanceof URL) {
+                const provider = streamProvider(input.href);
+                if (!provider) return result || { tracks: [] };
+                const title = provider === "youtube" ? "YouTube link" : "SoundCloud link";
+                const candidate = { info: { uri: input.href, sourceName: provider } };
+                return { tracks: [unresolved({ kind: "link", title, url: input.href, source: provider }, userId, candidate)] };
+            }
+            const providers = source === "scsearch" ? ["scsearch"] : source === "ytsearch" ? ["ytsearch"] : ["ytsearch", "scsearch"];
+            const results = await Promise.all(providers.map(provider =>
+                extractSearch(extractor, `${provider}5:${input}`, signal).catch(error => {
+                    if (!signal.aborted) warn(`${provider}: ${ytDlpErrorDetail(error)}`, error);
+                    return [];
+                })));
+            const tracks = results.flat().flatMap(entry => {
+                const uri = entry.webpage_url || entry.url;
+                const provider = streamProvider(uri);
+                if (!entry.title || !provider) return [];
+                const reference = { kind: "link", title: entry.title, author: entry.uploader || entry.channel || "Unknown artist",
+                    url: uri, source: provider, duration: Number(entry.duration) * 1_000 || 0 };
+                const candidate = { info: { ...reference, uri, sourceName: provider } };
+                return [unresolved(reference, userId, candidate, !source)];
+            });
+            return { tracks, selection: true };
+        }).catch(error => {
+            if (error.name === "TimeoutError") throw new MusicError("Music search timed out. Try a direct link or `/playfile`.");
+            throw error;
+        });
     }
 
-    function unresolved(reference, userId, candidate = null, allowAlternateSource = false) {
+    function unresolved(reference, userId, candidate = null, allowAlternateSource = false, retryPlan) {
+        allowAlternateSource ||= reference.kind === "match";
         const requester = { id: userId };
-        const track = manager.utils.buildUnresolvedTrack({ info: { ...reference,
+        const track = manager.utils.buildUnresolvedTrack({ info: { ...reference, uri: reference.url,
             sourceName: reference.source, isSeekable: true } }, requester);
-        track.userData = { musicReference: reference };
+        track.userData = { musicReference: reference, musicPlaybackId: randomUUID() };
+        const phases = embedded
+            ? ["native", "match", "extractMatch", "extract", "cache"]
+            : ["native", "extract", "cache", "match", "extractMatch"];
+        const plan = retryPlan || { phases, expires: 0, reference, userId, candidate, allowAlternateSource };
+        playbackPlans.set(track, plan);
+
         async function findPlayable(node, signal) {
-            let result = candidate;
-            if (reference.kind === "match") {
-                result = await matchTrack(node, reference, requester, extractor ? candidate => {
-                    if (!streamProvider(candidate.info.uri)) return candidate;
-                    return providerTrack(node, candidate.info.uri, requester, candidate.info, signal);
-                } : undefined, undefined, signal);
-            } else {
-                const uri = result?.info.uri || reference.url;
-                if (extractor && streamProvider(uri)) {
-                    const playable = await providerTrack(node, uri, requester, result?.info, signal);
-                    signal?.throwIfAborted();
-                    if (playable) result = playable;
-                    else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
-                        node.info?.sourceManagers?.includes("soundcloud")) {
-                        const alternate = await matchSoundCloudTrack(node, result, requester, {
-                            binary: extractor,
-                            resolve: url => providerTrack(node, url, requester, undefined, signal),
-                            signal,
-                        }).catch(error => {
-                            if (!signal?.aborted) warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
-                            return null;
-                        });
-                        signal?.throwIfAborted();
-                        if (alternate) {
-                            Object.assign(alternate.info, { title: result.info.title, author: result.info.author });
-                            result = alternate;
-                            log("DEBUG", "Music", "YouTube unavailable. Recovered with a SoundCloud match.");
-                        } else if (embedded) {
-                            log("INFO", "Music", "SoundCloud fallback returned no playable match.");
-                        }
+            for (let phase; (phase = plan.phases.shift());) {
+                signal.throwIfAborted();
+                if (phase === "native") {
+                    if (candidate?.encoded && !candidate.userData?.musicExtracted) return candidate;
+                    let match;
+                    if (reference.kind === "match") {
+                        match = await matchTrack(node, reference, requester, undefined, undefined, signal);
+                    } else if (!candidate) {
+                        const result = await searchTracks(node, reference.url, requester, { mediaHosts, signal }).catch(() => null);
+                        match = result?.tracks[0];
                     }
+                    if (match) {
+                        plan.candidate = match;
+                        return match;
+                    }
+                } else if (phase === "extract") {
+                    const uri = plan.candidate?.info.uri || reference.url;
+                    const remaining = plan.expires - Date.now();
+                    if (!extractor || !streamProvider(uri) || remaining <= 0) continue;
+                    const extracted = await audioStage(signal, Math.min(allowAlternateSource ? 11_000 : 17_000, remaining), child =>
+                        providerTrack(node, uri, requester, plan.candidate?.info, child)).catch(() => null);
+                    if (extracted) return extracted;
+                } else if (phase === "cache") {
+                    if (plan.direct?.info.sourceName !== "youtube" || allowAlternateSource) continue;
+                    const cached = await providerTrack(node, plan.direct.info.uri, requester, plan.direct.info, signal, true);
+                    if (cached) return cached;
+                } else if (phase === "match") {
+                    const original = plan.candidate;
+                    if (!allowAlternateSource || original?.info.sourceName !== "youtube") continue;
+                    const alternate = await matchSoundCloudTrack(node, original, requester, {
+                        binary: extractor, signal,
+                        resolve: (url, info) => providerTrack(node, url, requester, info, signal),
+                    }).catch(error => {
+                        if (!signal.aborted) warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
+                        return null;
+                    });
+                    if (alternate) {
+                        plan.alternate = alternate;
+                        log("DEBUG", "Music", "Trying a matched SoundCloud recording.");
+                        return alternate;
+                    }
+                } else if (phase === "extractMatch" && plan.alternate && !plan.alternate.userData?.musicExtracted) {
+                    const alternate = await providerTrack(node, plan.alternate.info.uri, requester, plan.alternate.info, signal);
+                    if (alternate) return alternate;
                 }
-                if (!result) result = (await searchTracks(node, reference.url, requester, { mediaHosts }).catch(() => null))?.tracks?.[0];
             }
-            return result;
+            return null;
         }
 
         let preparation;
-        function prepare(node) {
-            if (preparation?.node === node && preparation.expires > Date.now() && media.isAvailable(preparation.track)) {
-                return preparation.pending;
-            }
-            const entry = { node, expires: Infinity, pending: prepareAudio(signal => findPlayable(node, signal)) };
+        function prepare(node, parent) {
+            if (preparation?.node === node && media.isAvailable(preparation.track)) return preparation.pending;
+            if (!plan.expires) plan.expires = Date.now() + playbackBudget;
+            const entry = { node, pending:
+                audioStage(parent || shutdown.signal, Math.max(1, plan.expires - Date.now()), signal => findPlayable(node, signal))
+                .catch(error => {
+                    if (error.name === "TimeoutError") warn("Audio resolution deadline reached", error);
+                    else if (!shutdown.signal.aborted) warn("Audio resolution", error);
+                    return null;
+                }) };
             preparation = entry;
-            void entry.pending.then(result => {
-                entry.track = result;
-                entry.expires = result?.encoded ? Date.now() + 5 * 60_000 : 0;
-            }, () => { entry.expires = 0; });
+            void entry.pending.then(result => { entry.track = result; });
             return entry.pending;
         }
-        trackPreparers.set(track, prepare);
-
         track.resolve = async player => {
-            const result = await prepare(player.node);
+            const result = await prepare(player.node, player.getData?.("audioStartupSignal"));
             if (!result?.encoded) {
-                player.queue.current = null;
+                if (player.queue.current === track || (player.queue.current && endedTracks.has(player.queue.current))) player.queue.current = null;
                 const error = new MusicError("No playable match was found for this track.");
                 error.track = track;
                 throw error;
             }
-            trackPreparers.delete(track);
             delete track.resolve;
             delete track[UnresolvedTrackSymbol];
             Object.defineProperty(track, TrackSymbol, { value: true, configurable: true });
-            Object.assign(track, result, { userData: { ...result.userData, musicReference: reference }, requester });
+            Object.assign(track, result, { userData: { ...result.userData, ...track.userData }, requester });
             return track;
         };
         return track;
     }
 
-    function prefetchNext(player) {
-        const next = player.queue.tracks[0];
-        const prepare = trackPreparers.get(next);
-        const node = player.node;
-        if (!prepare || !player.queue.current || playerFor(player.guildId) !== player ||
-            embedded || !isLoopbackNode(node) || prefetchingNodes.has(node)) return;
-        prefetchingNodes.add(node);
-        void prepare(node).catch(error => warn("queue preparation", error)).finally(() => {
-            prefetchingNodes.delete(node);
-            if (player.queue.tracks[0] !== next) prefetchNext(player);
-        });
+    function identifyTrack(track) {
+        track.userData = { ...track.userData, musicPlaybackId: randomUUID() };
+        return track;
+    }
+
+    function playbackEvent(node, packet) {
+        if (shutdown.signal.aborted) return;
+        const player = playerFor(packet.guildId);
+        if (!player || player.node !== node) return;
+        const track = player.queue.current;
+        if (packet.op === "playerUpdate") {
+            const start = player.getData("audioStart");
+            if (!start || start.track !== track || start.confirmed || !packet.state.connected || packet.state.position <= 0) return;
+            start.confirmed = true;
+            startingPlayers.get(player)?.(true);
+            log("INFO", "Music", `Playback advancing (${track.info.sourceName}, ${packet.state.position} ms)`);
+            void sync(player, true).catch(error => warn("playback confirmation", error));
+            return;
+        }
+        if (packet.op !== "event" || !track) return;
+        const id = track.userData?.musicPlaybackId;
+        if (id && packet.track?.userData?.musicPlaybackId !== id) return;
+        if (packet.type === "TrackStartEvent") {
+            endedTracks.delete(track);
+            player.deleteData("audioTransition");
+            player.setData("audioStart", { track, confirmed: false });
+            return;
+        }
+        if (packet.type === "TrackEndEvent" && packet.reason !== "replaced") {
+            endedTracks.add(track);
+            const start = player.getData("audioStart");
+            if (packet.reason === "finished" && start?.track === track && !start.confirmed &&
+                track.info.duration > 0 && track.info.duration <= 3_000) {
+                startingPlayers.get(player)?.(true);
+            }
+        }
+        if (packet.type !== "TrackStuckEvent" && !(packet.type === "TrackEndEvent" && packet.reason === "loadFailed")) return;
+        const plan = playbackPlans.get(track);
+        if (plan && track.userData?.musicMediaMode === "direct") plan.direct = track;
+        const canExtract = plan?.phases.includes("extract") && extractor && streamProvider(plan.candidate?.info.uri || plan.reference.url);
+        const canCache = plan?.phases.includes("cache") && plan.direct?.info.sourceName === "youtube" && !plan.allowAlternateSource;
+        const canMatch = plan?.phases.includes("match") && plan.allowAlternateSource && plan.candidate?.info.sourceName === "youtube";
+        const canExtractAlternate = plan?.phases.includes("extractMatch") && extractor && plan.alternate && !plan.alternate.userData?.musicExtracted;
+        if ((canExtract || canCache || canMatch || canExtractAlternate) && plan.expires > Date.now()) {
+            const retry = unresolved(plan.reference, plan.userId, plan.candidate, plan.allowAlternateSource, plan);
+            player.queue.tracks.unshift(retry);
+            log("WARNING", "Music", `Playback failed on ${track.info.sourceName}; trying another audio path.`);
+        } else if (!startingPlayers.has(player)) {
+            void reportTrackError(player, track, packet).catch(error => warn("track error", error));
+        }
+        // The library will advance. A failed track must not be rotated back
+        // into repeat-queue or retained as the current track if resolving fails.
+        player.setData("audioTransition", true);
+        player.queue.current = null;
+        player.playing = false;
     }
 
     async function enqueue(interaction, ctx, tracks, { stored = false, first = false, allowAlternateSource = false } = {}) {
@@ -399,26 +478,52 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         if (player.getData("idle")) clearTimeout(player.getData("idle"));
         const queued = tracks.slice(0, capacity).map(track => {
             if (stored) return unresolved(track, ctx.userId);
-            if (extractor && !track.userData?.musicExtracted && streamProvider(track.info.uri)) {
+            if (manager.utils.isUnresolvedTrack(track)) return track;
+            if (!track.userData?.musicExtracted && streamProvider(track.info.uri) && (extractor || allowAlternateSource)) {
                 return unresolved(storeTrack(track), ctx.userId, track, allowAlternateSource);
             }
-            return track;
+            return identifyTrack(track);
         });
         await player.queue.add(queued, first ? 0 : undefined);
-        if (!player.playing && !player.queue.current) {
+        if (!player.playing && !player.queue.current && !player.getData("audioTransition")) {
             try {
-                await player.play({ paused: false });
+                await audioStage(ctx.audioSignal || shutdown.signal, playbackBudget, async signal => {
+                    let finish;
+                    const confirmed = new Promise(resolve => { finish = resolve; });
+                    startingPlayers.set(player, finish);
+                    player.setData("audioStartupSignal", signal);
+                    try {
+                        await player.play({ paused: false }).catch(error => {
+                            if (!player.queue.current && !player.queue.tracks.length) throw new MusicError("No playable match was found for this track.");
+                            throw error;
+                        });
+                        signal.throwIfAborted();
+                        if (!player.queue.current && !player.getData("audioTransition") && !player.playing) finish(false);
+                        if (!await confirmed) {
+                            throw new MusicError("The player could not start audio for those tracks.");
+                        }
+                    } finally {
+                        finish(false);
+                        startingPlayers.delete(player);
+                        player.deleteData("audioStartupSignal");
+                    }
+                });
             } catch (error) {
-                if (player.queue.current && queued.includes(player.queue.current)) player.queue.current = null;
-                player.queue.tracks = player.queue.tracks.filter(track => !queued.includes(track));
-                await player.queue.utils.save();
+                startingPlayers.get(player)?.(false);
+                if (error.name === "TimeoutError") {
+                    player.deleteData("audioStartupSignal");
+                    if (player.queue.current && player.queue.tracks.length) {
+                        await player.skip(1, false).catch(inner => warn("skip timed-out track", inner));
+                    } else if (playerFor(player.guildId) === player) {
+                        await player.destroy("Playback did not advance before the deadline").catch(inner => warn("voice cleanup", inner));
+                    }
+                    throw new MusicError("Playback did not start in time. Try another source or an audio file.");
+                }
+                if (!player.playing) scheduleIdle(player, ctx.settings);
                 throw error;
             }
-            if (!player.queue.current && !player.playing) {
-                throw new MusicError("The player couldn’t find playable audio for those tracks.");
-            }
+
         } else {
-            prefetchNext(player);
             void refresh(player).catch(error => warn("queue panel", error));
         }
         return { player, amount: queued.length, omitted: tracks.length - queued.length };
@@ -546,11 +651,12 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         await refresh(player, announce);
     }
 
-    async function reportTrackError(player, track, failure) {
+    async function reportTrackError(player, track, failure, notify = true) {
         const details = failure?.type === "TrackStuckEvent"
             ? `No audio frames for ${failure.thresholdMs} ms.`
             : failure?.exception?.message || failure?.message;
         log("WARNING", "Music", `Playback failed (${track?.info?.sourceName || "unknown source"}).`, details, failure?.exception?.cause);
+        if (!notify) return;
         const last = player.getData("errorNotice") || 0;
         if (Date.now() - last < 10000) return;
         player.setData("errorNotice", Date.now());
@@ -581,7 +687,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         const current = old.queue.current;
         const tracks = [...old.queue.tracks];
         const previous = [...old.queue.previous];
-        const { paused, position, volume, repeatMode } = old;
+        const { paused, lastPosition, volume, repeatMode } = old;
         const autoplay = old.getData("autoplay");
         const effect = old.getData("effect");
         await old.destroy("Repair music player").catch(error => warn("repair disconnect", error));
@@ -593,8 +699,22 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         if (effect) await applyFilter(player, effect);
         player.queue.previous = previous;
         await player.queue.add(tracks);
-        if (current) await player.play({ clientTrack: current, position: current.info.isSeekable ? position : 0, paused });
+        if (current) {
+            const reference = current.userData?.musicReference;
+            const track = current.userData?.musicExtracted && reference ? unresolved(reference, current.requester.id) : current;
+            const position = current.info.isSeekable ? Math.max(0, Math.min(lastPosition, current.info.duration - 1)) : 0;
+            await player.play({ clientTrack: track, position, paused });
+        }
         else if (tracks.length) await player.play({ paused: false });
+    }
+
+    async function restorePlayer(player) {
+        const guild = client.guilds.cache.get(player.guildId);
+        const voice = guild?.channels.cache.get(player.voiceChannelId);
+        if (!voice || playerFor(guild.id) !== player || shutdown.signal.aborted) return;
+        const settings = await data.settings(guild.id);
+        await repair({ guild, channelId: player.textChannelId }, { guild, voice, settings, player });
+        log("INFO", "Music", "Restored the queue after a fresh Lavalink session.");
     }
 
     async function applyFilter(player, name) {
@@ -616,11 +736,25 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
 
     if (manager) {
         function reportReady(node) {
-            if (!isReadyNode(node) || readyNodes.has(node)) return;
+            const session = sessions.get(node);
+            if (!session || !node.connected || !node.sessionId || !node.info || readyNodes.has(node) || shutdown.signal.aborted) return;
             readyNodes.add(node);
             connectionErrors.delete(node.id);
+            void node.updateSession(true, 60).catch(error => warn("enable Lavalink session resumption", error));
             if (onNodeReady) onNodeReady(node.id);
             else log("SUCCESS", "Audio Node", `${node.id} connected`);
+            if (embedded && node.id === "primary") {
+                const youtube = node.info.plugins?.find(plugin => plugin.name === "youtube-plugin");
+                if (youtube && node.info.sourceManagers?.includes("youtube")) {
+                    log("INFO", "Audio Node", `Lavalink ${node.info.version?.semver}; youtube-plugin ${youtube.version}`);
+                } else log("WARNING", "Audio Node", "The embedded node did not register youtube-plugin and its YouTube source.");
+            }
+            if (session.previous && !session.resumed) {
+                for (const player of manager.players.values()) {
+                    if (player.node === node) void serial(controls, player.guildId, () => restorePlayer(player))
+                        .catch(error => warn("restore player after reconnect", error));
+                }
+            }
         }
 
         manager.nodeManager.on("error", (node, error) => {
@@ -635,21 +769,37 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         });
         manager.nodeManager.on("connect", reportReady);
         manager.nodeManager.on("raw", (node, packet) => {
+            playbackEvent(node, packet);
             // The library emits raw before setting the session ID from the ready packet.
-            if (packet.op === "ready") queueMicrotask(() => reportReady(node));
+            if (packet.op === "ready") {
+                sessions.set(node, { previous: node.options.sessionId, resumed: packet.resumed });
+                node.options.sessionId = packet.sessionId;
+                queueMicrotask(() => reportReady(node));
+            }
+        });
+        manager.nodeManager.on("resumed", (node, _, players) => {
+            for (const state of players) {
+                const player = playerFor(state.guildId);
+                if (player?.node !== node) continue;
+                player.paused = state.paused;
+                player.playing = Boolean(state.track) && !state.paused;
+                player.connected = state.state.connected;
+                player.lastPosition = state.state.position;
+                player.lastPositionChange = Date.now();
+            }
         });
         manager.nodeManager.on("disconnect", (node, { code, reason }) => {
-            if (readyNodes.delete(node) && !["Node-Destroy", "Node-Disconnect"].includes(reason)) {
+            sessions.delete(node);
+            if (readyNodes.delete(node) && !shutdown.signal.aborted && !["Node-Destroy", "Node-Disconnect"].includes(reason)) {
                 log("WARNING", "Audio Node", `${node.id} disconnected (${code})`);
             }
         });
         manager.on("trackStart", (player, track) => {
             const title = sanitizeSingleLine(track?.info?.title, 100);
-            if (title) log("INFO", "Music", `Playing ${title}`);
+            if (title) log("INFO", "Music", `TrackStart: ${title}`);
             player.deleteData("votes");
             player.deleteData("sponsorSegments");
-            prefetchNext(player);
-            void sync(player, true).catch(error => warn("track start", error));
+            if (!player.getData("audioStart")) void sync(player, true).catch(error => warn("track start", error));
         });
         manager.on("playerUpdate", (_, player) => {
             const active = player.getData("sponsorSegments");
@@ -660,15 +810,19 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             void player.seek(Math.min(segment[1], active.track.info.duration - 1))
                 .catch(error => warn("SponsorBlock seek", error)).finally(() => { active.seeking = false; });
         });
-        manager.on("queueEnd", player => { void sync(player, false).catch(error => warn("queue end", error)); });
-        manager.on("trackError", (player, track, cause) => {
-            void reportTrackError(player, track || cause?.track, cause).catch(error => warn("track error", error));
+        manager.on("queueEnd", player => {
+            player.deleteData("audioTransition");
+            player.deleteData("audioStart");
+            startingPlayers.get(player)?.(false);
+            void sync(player, false).catch(error => warn("queue end", error));
         });
-        manager.on("trackStuck", (player, track, cause) => {
-            void reportTrackError(player, track, cause).catch(error => warn("track stuck", error));
+        manager.on("trackError", (player, track, cause) => {
+            const notify = cause?.type !== "TrackExceptionEvent" && !startingPlayers.has(player);
+            void reportTrackError(player, cause?.track || track, cause, notify).catch(error => warn("track error", error));
         });
         manager.on("playerMove", player => { void sync(player, false).catch(error => warn("voice move", error)); });
         manager.on("playerDestroy", player => {
+            startingPlayers.get(player)?.(false);
             clearTimeout(player.getData("idle"));
             if (!playerFor(player.guildId)) activeVoice.delete(player.guildId);
             void status(player, null).catch(error => warn("voice status", error));
@@ -688,14 +842,22 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
 
     return {
         manager, data, guard, nodeFor, audioStatus, playerFor, join, enqueue, lookup, unresolved, refresh, sync, scheduleIdle,
+        playbackDeadline: action => action(AbortSignal.any([shutdown.signal, AbortSignal.timeout(playbackBudget)])),
         select, selected, consumeSelection: id => selections.delete(id), applyFilter, applySponsors, repair, storeTrack,
         serialize: (id, fn) => serial(controls, id, fn),
         voiceChannel: player => client.channels.cache.get(player.voiceChannelId),
         handleMedia: media.handleHttp,
         start,
-        close: () => {
+        close: async () => {
             startup?.abort();
-            if (manager?.nodeManager.nodes.size) return manager.nodeManager.disconnectAll(true, true);
+            shutdown.abort();
+            if (!manager) return;
+            await Promise.allSettled([...manager.players.values()].map(player => player.destroy("Bot shutdown")));
+            await Promise.allSettled([...manager.nodeManager.nodes.values()].map(async node => {
+                const socket = node.socket;
+                node.destroy("Bot shutdown", true);
+                if (socket?.readyState === 2) await once(socket, "close", { signal: AbortSignal.timeout(1_000) }).catch(() => {});
+            }));
         },
     };
 }

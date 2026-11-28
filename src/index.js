@@ -5,6 +5,7 @@ const http = require("http");
 const { terminal, usesRenderLogs } = require("./utils/terminal");
 const { bridgeConsole, log, safeText } = require("./utils/runtimeLog");
 const { getInstanceRole, handlesCommand } = require("./utils/instanceRole");
+const { interactionDispatcher, limitInteractionCallbacks } = require("./utils/interactions");
 
 const {
     Client,
@@ -108,6 +109,7 @@ const client = new Client({
         Partials.Message,
     ],
 });
+limitInteractionCallbacks(client.rest);
 
 // ========================================
 // 📋 COMMAND COLLECTION
@@ -116,7 +118,6 @@ const client = new Client({
 client.commands = new Collection();
 const handlesMusic = handlesCommand(instanceRole, true);
 const handlesGeneral = handlesCommand(instanceRole, false);
-const reportsMusicOffline = instanceRole === "general" && !process.env.BAUAA_INSTANCE_ROLE?.trim();
 const music = installMusic(client, { enabled: handlesMusic, onNodeReady });
 const musicCommandNames = new Set(music.commands.map(command => command.data.name));
 const lavalinkMode = !handlesMusic ? "Disabled for this role" :
@@ -291,6 +292,7 @@ registerEvent(
 const health = createHealthHandler(client, instanceRole, {
     audioStatus: music.audioStatus,
     waitForInitialAudio: process.env.BAUAA_EMBEDDED_LAVALINK === "1",
+    isDraining: () => isShuttingDown,
 });
 const server = http.createServer((req, res) => {
     if (!music.handleHttp(req, res)) health(req, res);
@@ -317,7 +319,7 @@ client.on("shardDisconnect", (event, shardId) => {
 });
 
 client.on("shardReconnecting", (shardId) => {
-    log("INFO", "Discord Gateway", `Shard ${shardId} reconnecting`);
+    if (!isShuttingDown) log("INFO", "Discord Gateway", `Shard ${shardId} reconnecting`);
 });
 
 client.on("shardResume", (shardId, replayedEvents) => {
@@ -420,77 +422,31 @@ client.once("clientReady", async () => {
 // ⚡ SLASH COMMAND HANDLER
 // ========================================
 
-async function musicOfflineFallback(interaction) {
-    // Give the music instance time to acknowledge.
-    await new Promise(resolve => setTimeout(resolve, 1500));
+const dispatch = interactionDispatcher({
+    onError(message, error, interaction) {
+        const name = interaction.commandName ? `/${interaction.commandName}` : "Component";
+        const age = Date.now() - interaction.createdTimestamp;
+        log(error ? "ERROR" : "WARNING", "Interaction", `${name}: ${message} (${age} ms after creation, role ${instanceRole})`, error);
+    },
+    onAcknowledge(interaction) {
+        if (interaction.commandName) log("DEBUG", "Command", `/${interaction.commandName} by ${interaction.user.tag}`);
+    },
+});
 
-    try {
-        await interaction.reply({
-            content:
-                "🔴 **Music Service Unavailable**\n" +
-                "The music service is currently offline or not responding. " +
-                "Please try again later.",
-            flags: 64,
-        });
-    } catch (error) {
-        // The music instance may have already responded.
-        if ([40060, 10062].includes(error?.code)) return;
-
-        logError("Music", "Offline reply failed", error);
-    }
-}
-
-client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) {
-        if (interaction.isButton() || interaction.isStringSelectMenu()) {
-            if (helpCommand.matches(interaction.customId)) {
-                if (handlesGeneral) {
-                    await helpCommand.component(interaction).catch(error => logError("Help", "Command guide update failed", error));
-                }
-                return;
-            }
-            const isMusicComponent =
-                interaction.customId?.startsWith("bauaa:music:");
-
-            if (isMusicComponent) {
-                if (handlesMusic) {
-                    await music.component(interaction).catch(error => logError("Music", "Player control failed", error));
-                } else if (reportsMusicOffline) {
-                    await musicOfflineFallback(interaction);
-                }
-            }
+client.on("interactionCreate", interaction => {
+    if (isShuttingDown) return;
+    if (interaction.isChatInputCommand()) {
+        const command = client.commands.get(interaction.commandName);
+        if (command && handlesCommand(instanceRole, musicCommandNames.has(interaction.commandName))) {
+            void dispatch(interaction, command.execute.bind(command));
         }
         return;
     }
-
-    const command = client.commands.get(interaction.commandName);
-    const isMusicCommand = musicCommandNames.has(interaction.commandName);
-
-    if (!command || !handlesCommand(instanceRole, isMusicCommand)) {
-        if (reportsMusicOffline && isMusicCommand) await musicOfflineFallback(interaction);
-        return;
-    }
-
-    try {
-        log("DEBUG", "Command", `/${interaction.commandName} by ${interaction.user.tag}`);
-        await command.execute(interaction);
-    } catch (error) {
-        if (error?.code === RESTJSONErrorCodes.InteractionHasAlreadyBeenAcknowledged) {
-            log("WARNING", "Command", `/${interaction.commandName} already acknowledged. Check for another instance.`);
-            return;
-        }
-        logError("Command", `/${interaction.commandName} failed`, error);
-
-        try {
-            const content = "❌ An error occurred while executing this command.";
-            if (interaction.replied || interaction.deferred) {
-                await interaction.editReply({ content });
-            } else {
-                await interaction.reply({ content, flags: MessageFlags.Ephemeral });
-            }
-        } catch (replyError) {
-            logError("Command", "Error reply failed", replyError);
-        }
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+    if (handlesGeneral && helpCommand.matches(interaction.customId)) {
+        void dispatch(interaction, helpCommand.component);
+    } else if (handlesMusic && interaction.customId?.startsWith("bauaa:music:")) {
+        void dispatch(interaction, music.component);
     }
 });
 
@@ -532,11 +488,10 @@ async function shutdown(reason, exitCode = 0) {
         cleanupFailed = true;
         logError(component, "Shutdown failed", error);
     };
-    const httpClosed = new Promise(resolve => server.close(resolve));
     await Promise.resolve().then(() => music.close()).catch(error => onCleanupError("Audio Node", error));
-    await client.destroy().catch(error => onCleanupError("Discord Gateway", error));
     await Promise.all([
-        httpClosed,
+        new Promise(resolve => server.close(resolve)),
+        client.destroy().catch(error => onCleanupError("Discord Gateway", error)),
         closeDatabase().catch(error => onCleanupError("MongoDB", error)),
         closeLocalLavalink?.().catch(error => onCleanupError("Lavalink", error)),
     ]);

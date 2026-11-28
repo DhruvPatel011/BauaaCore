@@ -2,10 +2,11 @@ const { execFile } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
 const { promisify } = require("node:util");
 const { ytDlpOptions } = require("./shared");
+const { loadTracks } = require("./audioDeadline");
 
 const execute = promisify(execFile);
 const maxTrackBytes = 16 * 1024 * 1024;
-const maxCacheBytes = 64 * 1024 * 1024;
+const maxCacheBytes = 32 * 1024 * 1024;
 const format = "bestaudio[protocol=https][ext=webm]/bestaudio[protocol=https][ext=m4a]";
 const mediaPrefix = "/music/audio/";
 
@@ -14,7 +15,7 @@ function createMediaCache(address, exec = execute) {
     const cachedTracks = new WeakMap();
     let origin;
     let bytes = 0;
-    let busy = 0;
+    let busy = false;
     if (address) {
         try {
             const url = new URL(address);
@@ -25,38 +26,43 @@ function createMediaCache(address, exec = execute) {
     }
 
     async function cacheAudio(node, requester, command, args, fixedExtension, signal) {
-        if (!origin || busy >= 2 || signal?.aborted) return null;
-        busy++;
+        if (!origin || busy || signal?.aborted) return null;
+        busy = true;
         try {
             const { stdout } = await exec(command, args, {
-                timeout: 45000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true, signal,
+                timeout: 12_000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true, signal,
             });
             if (signal?.aborted || !Buffer.isBuffer(stdout) || stdout.length < 1024) return null;
             for (const [id, entry] of audio) if (entry.expires <= Date.now()) remove(id);
             while (bytes + stdout.length > maxCacheBytes && audio.size) remove(audio.keys().next().value);
             const id = randomBytes(18).toString("base64url");
             const extension = fixedExtension || (stdout.readUInt32BE(0) === 0x1a45dfa3 ? "webm" : "m4a");
-            const type = { webm: "audio/webm", m4a: "audio/mp4", mp3: "audio/mpeg" }[extension];
+            const type = { webm: "audio/webm", m4a: "audio/mp4", opus: "audio/ogg" }[extension];
             audio.set(id, { body: stdout, extension, type, expires: Date.now() + 7200000 });
             bytes += stdout.length;
-            const result = await node.search({ query: `${origin}${mediaPrefix}${id}.${extension}` }, requester).catch(() => null);
+            const result = await loadTracks(node, { query: `${origin}${mediaPrefix}${id}.${extension}` }, requester, signal).catch(() => null);
             const track = signal?.aborted ? null : result?.tracks?.[0];
             if (track) cachedTracks.set(track, id);
             else remove(id);
             return track || null;
         } finally {
-            busy--;
+            busy = false;
         }
     }
 
     function load(node, input, requester, binary, signal) {
-        return cacheAudio(node, requester, binary, [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input], undefined, signal);
+        const args = [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input];
+        return cacheAudio(node, requester, binary, args, undefined, signal);
     }
 
     function loadHls(node, input, requester, signal) {
-        return cacheAudio(node, requester, "ffmpeg", ["-nostdin", "-loglevel", "error", "-xerror", "-rw_timeout", "10000000",
-            "-protocol_whitelist", "https,tls,tcp,crypto", "-i", input, "-map", "0:a:0", "-c:a", "libmp3lame",
-            "-b:a", "128k", "-f", "mp3", "pipe:1"], "mp3", signal);
+        // Decode AAC here because the native SoundCloud source and Lavalink's
+        // AAC decoder do not handle every HLS rendition. Fast Opus encoding
+        // fits the hosted CPU budget better than a complete MP3 transcode.
+        return cacheAudio(node, requester, "ffmpeg", ["-nostdin", "-loglevel", "error", "-xerror", "-rw_timeout", "4000000",
+            "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "1",
+            "-protocol_whitelist", "https,tls,tcp,crypto", "-i", input, "-map", "0:a:0", "-c:a", "libopus", "-application", "audio",
+            "-compression_level", "0", "-threads", "1", "-b:a", "96k", "-f", "ogg", "pipe:1"], "opus", signal);
     }
 
     function remove(id) {
@@ -68,7 +74,7 @@ function createMediaCache(address, exec = execute) {
 
     function handleHttp(req, res) {
         if (!req.url?.startsWith(mediaPrefix)) return false;
-        const match = /^([\w-]{24})\.(webm|m4a|mp3)$/.exec(req.url.slice(mediaPrefix.length));
+        const match = /^([\w-]{24})\.(webm|m4a|opus)$/.exec(req.url.slice(mediaPrefix.length));
         const entry = audio.get(match?.[1]);
         if (!entry || entry.extension !== match[2] || entry.expires <= Date.now() || !["GET", "HEAD"].includes(req.method)) {
             res.writeHead(404).end();

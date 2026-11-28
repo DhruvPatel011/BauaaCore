@@ -331,7 +331,8 @@ test("ignore list renders 15 entries and reaches records on the second page", as
     assert.equal(await readPage(3), "Choose a page from 1 to 2.");
 });
 
-test("readiness requires Discord and MongoDB, while liveness reports the HTTP process", async () => {
+test("readiness requires Discord and MongoDB, while liveness reports the HTTP process", async t => {
+    t.mock.timers.enable({ apis: ["Date"] });
     let discordReady = false;
     let pingCount = 0;
     db.command = async (command, options) => {
@@ -374,6 +375,9 @@ test("readiness requires Discord and MongoDB, while liveness reports the HTTP pr
     const restarting = await call("/ready", embedded);
     assert.equal(restarting.code, 200);
     assert.equal(restarting.body.audio, "offline");
+    t.mock.timers.tick(60_000);
+    assert.equal((await call("/ready", embedded)).code, 503);
+    assert.equal((await call("/health", embedded)).code, 200);
 
     db.command = async () => { throw new Error("Database connection lost"); };
     const unavailable = await call("/ready", createHealthHandler(client));

@@ -19,7 +19,7 @@ lavalink:
       local: false
       nico: false
     youtubePlaylistLoadLimit: 5
-    trackStuckThresholdMs: 30000
+    trackStuckThresholdMs: 8000
     playerUpdateInterval: 3
     soundcloudFilterOutPreviewTracks: true
 
@@ -29,6 +29,11 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: false
     allowDirectPlaylistIds: false
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
   lavasrc:
     sources:
       spotify: ${LAVASRC_SPOTIFY_ENABLED:false}
