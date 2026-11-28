@@ -78,8 +78,17 @@ async function resolvePlayInput(music, interaction, command, options, signal) {
     ctx.audioSignal = signal;
     const query = command === "playfile" ? options.file?.url : options.query;
     if (!query) throw new MusicError("Enter a song name or link, or attach an audio file.");
+    if (command === "play") ctx.soundCloudSearch = music.startSoundCloudSearch(ctx, query);
+    try {
+        return await queuePlayInput(music, interaction, ctx, command, query, options, signal);
+    } finally {
+        ctx.soundCloudSearch?.cancel();
+    }
+}
+
+async function queuePlayInput(music, interaction, ctx, command, query, options, signal) {
     const source = command === "search" ? options.source : undefined;
-    const result = await music.lookup(ctx.guild.id, query, ctx.userId, source, signal);
+    const result = await music.lookup(ctx.guild.id, query, ctx.userId, source, signal, ctx.soundCloudSearch);
     signal.throwIfAborted();
     if (!result.tracks.length) throw new MusicError("No playable audio found. Try a different link or search.");
     if (command === "search" && result.selection) {

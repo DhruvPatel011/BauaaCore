@@ -141,7 +141,7 @@ function recordingTitle({ title, author }) {
 
 const artistSeparator = /\s+(?:x|×|&|and|feat\.?)\s+|,\s*/i;
 
-async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute, signal } = {}) {
+async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute, signal, search } = {}) {
     const { info } = track;
     if (!info.title || !info.author || !(info.duration > 0) || info.isStream) return null;
     const title = recordingTitle(info);
@@ -165,22 +165,27 @@ async function matchSoundCloudTrack(node, track, requester, { binary, resolve, e
         const artistTolerance = officialVideo ? Math.min(90_000, info.duration * 0.32) : 25_000;
         return alternate.duration > 0 && matchingTitle && (sameArtist ? difference <= artistTolerance : difference <= 5_000 && creditedTitle);
     }
-    const results = await audioStage(signal, 3_500, child => loadTracks(node,
-        { query: `${reference.title} ${reference.author}`, source: "scsearch" }, requester, child)).catch(() => null);
-    signal?.throwIfAborted();
-    const native = results?.tracks.find(({ encoded, info: alternate }) => encoded &&
-        alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate));
-    if (native || !binary || !resolve) return native || null;
+    if (!search) {
+        const results = await audioStage(signal, 3_500, child => loadTracks(node,
+            { query: `${reference.title} ${reference.author}`, source: "scsearch" }, requester, child)).catch(() => null);
+        signal?.throwIfAborted();
+        const native = results?.tracks.find(({ encoded, info: alternate }) => encoded &&
+            alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate));
+        if (native) return native;
+    }
+    if (!binary || !resolve) return null;
 
     // Lavalink can reject an entire search when a result uses an unsupported SoundCloud format.
     signal?.throwIfAborted();
-    const entries = await extractSearch(binary, `scsearch4:${title} ${performers.join(" ") || info.author}`, signal, exec);
+    const entries = search ? await search :
+        await extractSearch(binary, `scsearch4:${title} ${performers.join(" ") || info.author}`, signal, exec);
     for (const entry of entries) {
         signal?.throwIfAborted();
         const alternate = {
             title: entry?.title,
             author: entry?.artists?.join?.(" & ") || entry?.uploader,
             duration: Number(entry?.duration) * 1000,
+            soundCloudId: entry.id,
         };
         const url = entry.webpage_url || entry.url;
         if (!alternate.title || !alternate.author || streamProvider(url) !== "soundcloud" ||
@@ -238,11 +243,16 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
     const format = provider === "soundcloud"
         ? "bestaudio[protocol=https][format_id!*=preview]/bestaudio[protocol^=m3u8][format_id!*=preview]"
         : "bestaudio[protocol=https]/best[protocol=https]";
+    // Search already identified a public track ID. Pass the canonical API
+    // URL to yt-dlp so it can skip resolving the permalink again.
+    const source = provider === "soundcloud" && /^\d{1,20}$/.test(knownInfo?.soundCloudId ?? "")
+        ? `https://api.soundcloud.com/tracks/${knownInfo.soundCloudId}` : input;
     const { stdout } = await audioStage(signal, provider === "soundcloud" ? 11_000 : 8_000, child => exec(binary, [...ytDlpOptions, "-q", "-f", format, "--output-na-placeholder", "null", "--print",
         '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j,"protocol":%(protocol)j}',
-        "--", input], { maxBuffer: 65536, windowsHide: true, signal: child }));
+        "--", source], { maxBuffer: 65536, windowsHide: true, signal: child }));
     signal?.throwIfAborted();
     const metadata = JSON.parse(stdout.trim());
+    if (source !== input && String(metadata.id) !== String(knownInfo.soundCloudId)) return null;
     const resource = new URL(metadata.url);
     const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com", "playback.media-streaming.soundcloud.cloud"];
     if (resource.protocol !== "https:" || resource.username || resource.password || resource.port ||
