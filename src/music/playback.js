@@ -66,11 +66,21 @@ function queued(result, name) {
 }
 
 async function playInput(music, interaction, command, options) {
+    return music.playbackDeadline(signal => resolvePlayInput(music, interaction, command, options, signal)).catch(error => {
+        if (error.name === "TimeoutError") throw new MusicError("Playback did not start in time. Try another source or an audio file.");
+        throw error;
+    });
+}
+
+async function resolvePlayInput(music, interaction, command, options, signal) {
     const ctx = await music.guard(interaction, command, { voice: true });
+    signal.throwIfAborted();
+    ctx.audioSignal = signal;
     const query = command === "playfile" ? options.file?.url : options.query;
     if (!query) throw new MusicError("Enter a song name or link, or attach an audio file.");
     const source = command === "search" ? options.source : undefined;
-    const result = await music.lookup(ctx.guild.id, query, ctx.userId, source);
+    const result = await music.lookup(ctx.guild.id, query, ctx.userId, source, signal);
+    signal.throwIfAborted();
     if (!result.tracks.length) throw new MusicError("No playable audio found. Try a different link or search.");
     if (command === "search" && result.selection) {
         const matches = result.tracks.slice(0, 10);

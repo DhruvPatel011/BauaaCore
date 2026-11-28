@@ -1159,7 +1159,8 @@ test("handler: language requests work for one reply or the conversation and are 
     await chat("Give a second example", gujarati);
     assert.equal(conversations.getConversationLanguage(G2, U1), undefined);
 
-    const reset = await aiReset.execute({ guild: { id: G1 }, guildId: G1, user: { id: U1 }, reply: async reply => reply });
+    const reset = await aiReset.execute({ guild: { id: G1 }, guildId: G1, user: { id: U1 },
+        deferReply: async () => {}, editReply: async reply => reply });
     assert.match(reset.content, /Hinglish/);
     await chat("What about an example?", hinglish);
 });

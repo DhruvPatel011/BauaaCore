@@ -7,9 +7,6 @@ function getInstanceRole(env = process.env) {
         return configured;
     }
 
-    const audioNodeConfigured = (env.LAVALINK_URL?.trim() && env.LAVALINK_PASSWORD) ||
-        (env.LAVALINK_URL_BACKUP?.trim() && env.LAVALINK_PASSWORD_BACKUP);
-    if (env.RENDER === "true" && !audioNodeConfigured) return "general";
     return "all";
 }
 

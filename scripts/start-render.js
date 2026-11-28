@@ -37,10 +37,10 @@ function start(name, command, args, cwd, env, captureAudio = false) {
     return { child, closed };
 }
 
-async function stop({ child, closed }) {
+async function stop({ child, closed }, gracePeriod) {
     if (!child.pid || child.exitCode !== null || child.signalCode !== null) return closed;
     child.kill("SIGTERM");
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    const timeout = setTimeout(() => child.kill("SIGKILL"), gracePeriod);
     try {
         await closed;
     } finally {
@@ -54,7 +54,8 @@ let stopping = false;
 
 function startAudio() {
     audio = start("Lavalink", "java", [
-        "-XX:MaxRAMPercentage=35.0", "-XX:+ExitOnOutOfMemoryError", "-jar", "Lavalink.jar",
+        "-XX:MaxRAMPercentage=35.0", "-XX:ActiveProcessorCount=1", "-XX:+UseSerialGC",
+        "-XX:+ExitOnOutOfMemoryError", "-jar", "Lavalink.jar",
     ], resolve(root, "music-node"), {
         ...process.env,
         LAVALINK_PASSWORD: botEnv.LAVALINK_PASSWORD,
@@ -73,8 +74,8 @@ async function shutdown(code) {
     if (stopping) return;
     stopping = true;
     clearTimeout(restartTimer);
-    await stop(bot);
-    if (audio) await stop(audio);
+    await stop(bot, 13_000);
+    if (audio) await stop(audio, 10_000);
     process.exitCode = code;
 }
 

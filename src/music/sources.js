@@ -2,6 +2,7 @@ const { isIP } = require("node:net");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { MusicError, TRACK_LIMIT, ytDlpOptions } = require("./shared");
+const { audioStage, loadTracks } = require("./audioDeadline");
 
 const publicSources = [
     "youtube.com", "youtu.be", "soundcloud.com", "spotify.com", "spotify.link", "spoti.fi",
@@ -86,9 +87,9 @@ function parseSpotifyEmbed(html, type, id) {
     return { name: entity.name || entity.title || `Spotify ${type}`, tracks: tracks.slice(0, TRACK_LIMIT) };
 }
 
-async function spotifyEmbed(item) {
+async function spotifyEmbed(item, signal) {
     const response = await fetch(`https://open.spotify.com/embed/${item.type}/${item.id}`, {
-        signal: AbortSignal.timeout(8000),
+        signal: signal || AbortSignal.timeout(8000),
         redirect: "error",
         headers: { "User-Agent": "Mozilla/5.0", Accept: "text/html" },
     });
@@ -115,7 +116,9 @@ function similarTrack(track, reference) {
 async function matchTrack(node, reference, requester, resolve = track => track, sources = searchSources, signal) {
     for (const source of sources) {
         signal?.throwIfAborted();
-        const results = await node.search({ query: `${reference.title} ${reference.author}`, source }, requester).catch(() => null);
+        const results = await audioStage(signal, 3_500, child =>
+            loadTracks(node, { query: `${reference.title} ${reference.author}`, source }, requester, child)).catch(() => null);
+        signal?.throwIfAborted();
         const ranked = (results?.tracks || []).map(track => ({ track, score: similarTrack(track, reference) }))
             .sort((left, right) => right.score - left.score);
         for (const { track, score } of ranked.slice(0, 3)) {
@@ -158,32 +161,43 @@ async function matchSoundCloudTrack(node, track, requester, { binary, resolve, e
         const sameArtist = alternateArtists.some(artist => artists.includes(artist));
         const creditedTitle = labels.some(artist => credited === `${title} ${artist}` || credited === `${artist} ${title}`);
         const matchingTitle = labels.some(author => recordingTitle({ ...alternate, author }) === title);
-        return alternate.duration > 0 && matchingTitle && (sameArtist ? difference <= 25_000 : difference <= 5_000 && creditedTitle);
+        const officialVideo = /\bofficial (?:music )?video\b/i.test(info.title);
+        const artistTolerance = officialVideo ? Math.min(90_000, info.duration * 0.32) : 25_000;
+        return alternate.duration > 0 && matchingTitle && (sameArtist ? difference <= artistTolerance : difference <= 5_000 && creditedTitle);
     }
-    const native = await matchTrack(node, reference, requester, candidate => {
-        const { info: alternate } = candidate;
-        if (candidate.encoded && alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate)) return candidate;
-        return null;
-    }, ["scsearch"], signal);
-    if (native || !binary || !resolve) return native;
+    const results = await audioStage(signal, 3_500, child => loadTracks(node,
+        { query: `${reference.title} ${reference.author}`, source: "scsearch" }, requester, child)).catch(() => null);
+    signal?.throwIfAborted();
+    const native = results?.tracks.find(({ encoded, info: alternate }) => encoded &&
+        alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate));
+    if (native || !binary || !resolve) return native || null;
 
     // Lavalink can reject an entire search when a result uses an unsupported SoundCloud format.
     signal?.throwIfAborted();
-    const { stdout } = await exec(binary, [...ytDlpOptions, "--flat-playlist", "--dump-single-json", "--",
-        `scsearch6:${title} ${performers.join(" ") || info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true, signal });
-    for (const entry of JSON.parse(stdout).entries ?? []) {
+    const entries = await extractSearch(binary, `scsearch4:${title} ${performers.join(" ") || info.author}`, signal, exec);
+    for (const entry of entries) {
         signal?.throwIfAborted();
         const alternate = {
             title: entry?.title,
             author: entry?.artists?.join?.(" & ") || entry?.uploader,
             duration: Number(entry?.duration) * 1000,
         };
-        if (!alternate.title || !alternate.author || streamProvider(entry.webpage_url) !== "soundcloud" ||
+        const url = entry.webpage_url || entry.url;
+        if (!alternate.title || !alternate.author || streamProvider(url) !== "soundcloud" ||
             !sameRecording(alternate)) continue;
-        const playable = await resolve(entry.webpage_url);
+        const playable = await Promise.resolve().then(() => resolve(url, alternate)).catch(() => null);
+        signal?.throwIfAborted();
         if (playable) return playable;
     }
     return null;
+}
+
+async function extractSearch(binary, query, signal, exec = execute) {
+    return audioStage(signal, query.startsWith("scsearch") ? 13_000 : 8_000, async child => {
+        const { stdout } = await exec(binary, [...ytDlpOptions, "--flat-playlist", "--dump-single-json", "--", query],
+            { maxBuffer: 512 * 1024, windowsHide: true, signal: child });
+        return (JSON.parse(stdout).entries || []).filter(Boolean);
+    });
 }
 
 function streamProvider(input) {
@@ -198,37 +212,35 @@ function streamProvider(input) {
     return null;
 }
 
-function resolvedProviderTrack(track, input, provider, info) {
+function resolvedProviderTrack(track, input, provider, info, mode = "cache") {
     if (!track?.encoded || track.info?.sourceName !== "http") return null;
     Object.assign(track.info, { uri: input, sourceName: provider, identifier: String(info.identifier || track.info.identifier),
         title: info.title || track.info.title, author: info.author || track.info.author,
         artworkUrl: info.artworkUrl || track.info.artworkUrl,
         duration: Number.isFinite(info.duration) && info.duration > 0 ? info.duration : track.info.duration });
-    track.userData = { ...track.userData, musicExtracted: true };
+    track.userData = { ...track.userData, musicExtracted: true, musicMediaMode: mode };
     return track;
 }
 
-async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls, { preferDirect = false, signal } = {}) {
+async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls, { preferDirect = false, cacheOnly = false, signal } = {}) {
     signal?.throwIfAborted();
     const provider = binary && streamProvider(input);
     if (!provider) return null;
     const useKnownInfo = provider === "youtube" && knownInfo?.sourceName === "youtube" && knownInfo.uri === input && !knownInfo.isStream;
-    if (!preferDirect && useKnownInfo && fallback) {
+    if ((!preferDirect || cacheOnly) && useKnownInfo && fallback) {
         // The download can reuse the search result's metadata and avoid a second yt-dlp invocation.
-        const hosted = await fallback(node, input, requester, binary).catch(error => {
-            // Direct streams can still work when the audio cannot fit in the cache or has a different format.
-            if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /requested format is not available/i.test(error.stderr?.toString() || "")) return null;
-            throw error;
-        });
+        const hosted = await audioStage(signal, 11_000, child => fallback(node, input, requester, binary, child)).catch(() => null);
+        signal?.throwIfAborted();
         const ready = resolvedProviderTrack(hosted, input, provider, knownInfo);
-        if (ready) return ready;
+        if (ready || cacheOnly) return ready;
     }
+    if (cacheOnly) return null;
     const format = provider === "soundcloud"
-        ? "bestaudio[protocol^=m3u8][format_id!*=preview]/bestaudio[protocol=https][format_id!*=preview]"
+        ? "bestaudio[protocol=https][format_id!*=preview]/bestaudio[protocol^=m3u8][format_id!*=preview]"
         : "bestaudio[protocol=https]/best[protocol=https]";
-    const { stdout } = await exec(binary, [...ytDlpOptions, "-q", "-f", format, "--print",
+    const { stdout } = await audioStage(signal, provider === "soundcloud" ? 11_000 : 8_000, child => exec(binary, [...ytDlpOptions, "-q", "-f", format, "--output-na-placeholder", "null", "--print",
         '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j,"protocol":%(protocol)j}',
-        "--", input], { timeout: 40000, maxBuffer: 65536, windowsHide: true, signal });
+        "--", input], { maxBuffer: 65536, windowsHide: true, signal: child }));
     signal?.throwIfAborted();
     const metadata = JSON.parse(stdout.trim());
     const resource = new URL(metadata.url);
@@ -238,19 +250,22 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
     const info = { title: metadata.title, author: metadata.author, identifier: metadata.id,
         artworkUrl: metadata.artwork, duration: Number(metadata.duration) * 1000 };
     if (provider === "soundcloud" && metadata.protocol?.startsWith("m3u8")) {
-        if (!resource.pathname.endsWith(".m3u8")) return null;
-        return resolvedProviderTrack(await loadHls?.(node, resource.href, requester), input, provider, info);
+        const track = await audioStage(signal, 12_000, child => loadHls?.(node, resource.href, requester, child));
+        return resolvedProviderTrack(track, input, provider, info);
     }
     // A separate Lavalink host may be unable to open a YouTube URL bound to the bot's IP.
-    const loadCached = () => signal?.aborted ? null : fallback?.(node, input, requester, binary).catch(() => null);
+    const loadCached = () => !fallback || signal?.aborted ? null :
+        audioStage(signal, 10_000, child => fallback(node, input, requester, binary, child)).catch(() => null);
     let track = provider === "youtube" && !preferDirect && !useKnownInfo && !knownInfo?.isStream ? await loadCached() : null;
+    let usedDirect = false;
     if (!track) {
         signal?.throwIfAborted();
-        const result = await node.search({ query: resource.href }, requester).catch(() => null);
+        const result = await audioStage(signal, 3_000, child => loadTracks(node, { query: resource.href }, requester, child)).catch(() => null);
         track = result?.tracks?.[0];
+        usedDirect = Boolean(track);
     }
-    if (!track && (provider === "soundcloud" || (preferDirect && !knownInfo?.isStream))) track = await loadCached();
-    return resolvedProviderTrack(track, input, provider, info);
+    if (!track && preferDirect && provider === "youtube" && !knownInfo?.isStream) track = await loadCached();
+    return resolvedProviderTrack(track, input, provider, info, usedDirect ? "direct" : "cache");
 }
 
 function storeTrack(track) {
@@ -265,13 +280,14 @@ function storeTrack(track) {
 }
 
 async function searchTracks(node, input, requester, options = {}) {
+    const { signal } = options;
     const query = checkedQuery(input, options.mediaHosts);
     if (typeof query === "string") {
         const sources = options.source ? [options.source] : searchSources;
         let failed;
-        const find = async source => {
+        const find = async (source, parent = signal) => {
             try {
-                const result = await node.search({ query, source }, requester);
+                const result = await audioStage(parent, 4_500, child => loadTracks(node, { query, source }, requester, child));
                 if (result.loadType === "error") failed = true;
                 return result.tracks || [];
             } catch {
@@ -280,7 +296,9 @@ async function searchTracks(node, input, requester, options = {}) {
             }
         };
         let alternate;
-        const timer = sources.length > 1 && setTimeout(() => { alternate = find(sources[1]); }, 1500);
+        const hedge = new AbortController();
+        const hedgeSignal = signal ? AbortSignal.any([signal, hedge.signal]) : hedge.signal;
+        const timer = sources.length > 1 && setTimeout(() => { alternate = find(sources[1], hedgeSignal); }, 1500);
         let tracks;
         try {
             tracks = await find(sources[0]);
@@ -288,13 +306,17 @@ async function searchTracks(node, input, requester, options = {}) {
             clearTimeout(timer);
         }
         if (!tracks.length && sources.length > 1) tracks = await (alternate || find(sources[1]));
-        if (tracks.length) return { tracks, selection: true };
+        if (tracks.length) {
+            hedge.abort();
+            return { tracks, selection: true };
+        }
+        signal?.throwIfAborted();
         if (failed) throw new MusicError("The music search provider is unavailable. Try a link or `/playfile`.");
         return { tracks: [] };
     }
     let url = query;
     if (["spotify.link", "spoti.fi"].includes(url.hostname)) {
-        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(5000) }).catch(() => null);
+        const response = await audioStage(signal, 5_000, child => fetch(url, { redirect: "manual", signal: child })).catch(() => null);
         await response?.body?.cancel();
         const destination = response?.headers.get("location");
         if (!destination) throw new MusicError("Open the Spotify share link and paste its `open.spotify.com` URL.");
@@ -303,17 +325,17 @@ async function searchTracks(node, input, requester, options = {}) {
     }
     const spotify = spotifyItem(url);
     if (spotify) {
-        const publicResult = await spotifyEmbed(spotify).catch(() => null);
+        const publicResult = await audioStage(signal, 6_000, child => spotifyEmbed(spotify, child)).catch(() => null);
         if (publicResult?.tracks.length) return { ...publicResult, matched: true, playlist: spotify.type !== "track" };
         if (!node.info?.sourceManagers?.includes("spotify")) {
             throw new MusicError("Spotify didn’t expose the tracks for this link. Try a public Spotify link, a YouTube playlist, or `/spotify playlists` if your account is linked.");
         }
     }
-    const result = await node.search({ query: url.href }, requester)
+    const result = await audioStage(signal, 4_500, child => loadTracks(node, { query: url.href }, requester, child))
         .catch(() => { throw new MusicError("The audio source could not load that link. Try another link or `/playfile`."); });
     if (result.loadType === "error") throw new MusicError("The source rejected this link. Try another link or `/playfile`.");
     return { tracks: (result.tracks || []).slice(0, TRACK_LIMIT), name: result.playlist?.title, playlist: result.loadType === "playlist" };
 }
 
 module.exports = { checkedQuery, customHosts, parseSpotifyEmbed, spotifyItem, matchTrack, matchSoundCloudTrack,
-    storeTrack, searchTracks, streamProvider, directProviderTrack };
+    storeTrack, searchTracks, streamProvider, directProviderTrack, extractSearch };

@@ -220,7 +220,9 @@ function installMusic(client, deps) {
             const ctx = await music.guard(interaction, command);
             const player = ctx.player;
             const node = music.nodeFor(ctx.guild.id);
-            return `Audio node · ${node.id}\nLavalink · ${node.info?.version?.semver || "ready"}\nVoice · ${player?.connected ? "Connected" : "Idle or connecting"}\nTracks queued · ${player?.queue.tracks.length || 0}\nSources · ${node.info?.sourceManagers?.join(", ") || "Unknown"}`;
+            const playback = player?.queue.current ? `${player.paused ? "Paused" : player.getData("audioStart")?.confirmed ? "Advancing" : "Waiting for audio"} · ${Math.floor(player.lastPosition / 1_000)}s` : "Idle";
+            const youtube = node.info?.plugins?.find(plugin => plugin.name === "youtube-plugin");
+            return `Audio node · ${node.id}\nLavalink · ${node.info?.version?.semver || "ready"}\nYouTube plugin · ${youtube?.version || "Unavailable"}\nVoice · ${player?.connected ? "Connected" : "Idle or connecting"}\nPlayback · ${playback}\nTracks queued · ${player?.queue.tracks.length || 0}\nSources · ${node.info?.sourceManagers?.join(", ") || "Unknown"}`;
         }
         if (command === "music") {
             await music.guard(interaction, command);
@@ -270,14 +272,16 @@ function installMusic(client, deps) {
     const commands = definitions.map(item => ({ data: slashData(item), async execute(interaction) {
         if (!interaction.inGuild()) return interaction.reply({ content: "Run this command in a server.", flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        let options;
+        let result;
         try {
-            const options = slashOptions(interaction, item);
-            const result = await runSlash(interaction, item.name, options);
-            if (showSuccess(item.name, options, result)) await interaction.editReply(display(result));
-            else await interaction.deleteReply().catch(() => {});
+            options = slashOptions(interaction, item);
+            result = await runSlash(interaction, item.name, options);
         } catch (error) {
-            await interaction.editReply(display(errorReply(error, item.name)));
+            return interaction.editReply(display(errorReply(error, item.name)));
         }
+        if (showSuccess(item.name, options, result)) await interaction.editReply(display(result));
+        else await interaction.deleteReply().catch(() => {});
     } }));
 
     const help = createHelpBrowser(commands, musicCategories, {
@@ -303,8 +307,9 @@ function installMusic(client, deps) {
         }
         if (!interaction.isButton() || !controlButtons.has(action)) return;
         await interaction.deferUpdate();
+        let result;
         try {
-            const result = await music.serialize(interaction.guildId, async () => controls(music, interaction, action, { panelId: id,
+            result = await music.serialize(interaction.guildId, async () => controls(music, interaction, action, { panelId: id,
                 paused: music.playerFor(interaction.guildId)?.paused }));
             const player = music.playerFor(interaction.guildId);
             if (player) void music.refresh(player).catch(() => {});
@@ -316,10 +321,10 @@ function installMusic(client, deps) {
                     if (view) await interaction.editReply(view).catch(() => {});
                 }
             }
-            if (showSuccess(action, {}, result)) await interaction.followUp({ ...display(result), flags: MessageFlags.Ephemeral });
         } catch (error) {
-            await interaction.followUp({ ...display(errorReply(error, action)), flags: MessageFlags.Ephemeral });
+            return interaction.followUp({ ...display(errorReply(error, action)), flags: MessageFlags.Ephemeral });
         }
+        if (showSuccess(action, {}, result)) await interaction.followUp({ ...display(result), flags: MessageFlags.Ephemeral });
     }
 
     async function message(message) {

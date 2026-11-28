@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY scripts/install-yt-dlp.sh ./scripts/
 RUN bash scripts/install-yt-dlp.sh
 
@@ -19,6 +21,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg openjdk-17-jre-headless tini \
     && rm -rf /var/lib/apt/lists/* \
     && install -d -o node -g node /app/music-node/logs
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /build/node_modules ./node_modules
 COPY --from=build /build/.tools/yt-dlp ./.tools/yt-dlp
@@ -31,6 +35,7 @@ COPY scripts/start-render.js ./scripts/
 
 ENV NODE_ENV=production
 USER node
+RUN java -version && python3 --version && ffmpeg -hide_banner -version && ./.tools/yt-dlp --version
 EXPOSE 10000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "scripts/start-render.js"]

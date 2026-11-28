@@ -2,6 +2,7 @@ const { getDatabase } = require("../config/database");
 
 const DATABASE_TIMEOUT_MS = 1_000;
 const DATABASE_CHECK_TTL_MS = 5_000;
+const AUDIO_RESTART_GRACE_MS = 60_000;
 
 function sendJson(res, code, body) {
     res.writeHead(code, {
@@ -20,9 +21,14 @@ async function pingDatabase() {
     }
 }
 
-function createHealthHandler(client, instanceRole, { audioStatus, waitForInitialAudio = false } = {}) {
+function createHealthHandler(client, instanceRole, { audioStatus, waitForInitialAudio = false, isDraining = () => false } = {}) {
     let check;
-    let audioWasReady = !waitForInitialAudio;
+    let audioLastConnected;
+    function currentAudio() {
+        const audio = audioStatus?.();
+        if (audio === "connected") audioLastConnected = Date.now();
+        return audio;
+    }
     return async (req, res) => {
         let path;
         try {
@@ -33,8 +39,7 @@ function createHealthHandler(client, instanceRole, { audioStatus, waitForInitial
         }
 
         if (path === "/" || path === "/health") {
-            const audio = audioStatus?.();
-            if (audio === "connected") audioWasReady = true;
+            const audio = currentAudio();
             return sendJson(res, 200, {
                 service: "BauaaCore",
                 status: "running",
@@ -56,9 +61,10 @@ function createHealthHandler(client, instanceRole, { audioStatus, waitForInitial
                 database = await check.result;
                 discordConnected = client.isReady();
             }
-            const audio = audioStatus?.();
-            if (audio === "connected") audioWasReady = true;
-            const ready = discordConnected && database === "connected" && audioWasReady;
+            const audio = currentAudio();
+            const audioReady = !waitForInitialAudio ||
+                (audioLastConnected !== undefined && Date.now() - audioLastConnected < AUDIO_RESTART_GRACE_MS);
+            const ready = !isDraining() && discordConnected && database === "connected" && audioReady;
             return sendJson(res, ready ? 200 : 503, {
                 service: "BauaaCore",
                 status: ready ? "ready" : "not_ready",

@@ -365,9 +365,9 @@ Configure these settings in `.env` to enable music.
 | `MUSIC_MEDIA_HOSTS` | Optional comma-separated hostnames for trusted public audio file URLs. |
 | `LAVALINK_URL_BACKUP`, `LAVALINK_PASSWORD_BACKUP` | Optional second audio node for `/switchaudionode`. |
 
-For YouTube audio resolution, install [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) and Node.js 22 or newer on the bot host. Run BauaaCore and Lavalink on the same internet connection because YouTube can bind stream URLs to the origin IP. The optional audio fallback uses up to 64 MiB of memory and accepts clips up to 16 MiB each.
+For YouTube audio resolution, install [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) and Node.js 22 or newer on the bot host. Run BauaaCore and Lavalink on the same internet connection because YouTube can bind stream URLs to the origin IP. The optional audio cache holds up to 32 MiB and accepts tracks up to 16 MiB each.
 
-SoundCloud's HLS audio fallback also needs FFmpeg on the bot host's `PATH`. The combined Render image includes it.
+SoundCloud's HLS audio fallback needs FFmpeg with the `libopus` encoder on the bot host's `PATH`. The combined Render image includes it.
 
 From the repository root, start the included node with Docker Compose.
 
@@ -392,17 +392,21 @@ In the existing Render web service, open **Settings → Build → Source → Edi
 
 By default the image starts BauaaCore in the `all` role on Render's `PORT` and Lavalink on `127.0.0.1:2333`. It includes the YouTube resolver. The launcher uses `LAVALINK_PASSWORD` if supplied and otherwise generates a password for the private connection on each startup.
 
-Check for `role all` and `[Music] Lavalink primary connected` in the Render logs. Render shows the service status lines and Lavalink output in its log stream. On startup, `/ready` waits for the first Lavalink connection. `/health` reports the current audio connection status. In Discord, run `/debug` and `/play` to verify playback. Render Free web services can sleep when idle. Continuous voice playback and `/247` require an always-on instance with enough memory for both processes.
+Keep one instance responsible for music for this bot token. Stop any local `all` or `music` instance before using the combined service. Leave `BAUAA_INSTANCE_ROLE` unset or set it to `all` for this configuration. On startup, `/ready` waits for the first authenticated Lavalink connection. `/health` reports the current connection status. Point Render's HTTP health check to the bot's `/ready` on `PORT`. The embedded Lavalink API stays on authenticated loopback port `2333`.
+
+After deployment, check for `Lavalink primary connected` and the Lavalink and YouTube plugin versions in Render's logs. Join a Discord voice channel and run `/play` with `Husn Anuv Jain`, then with `https://www.youtube.com/watch?v=gJLVTKhTnog` and `https://soundcloud.com/anuvjainjatt/husn`. Listen for audio, run `/debug` twice to check that the position advances, and look for `TrackStart` and `Playback advancing` in the logs. Queue a second song while one is playing and test `/queue`, `/pause`, `/resume`, and `/skip`.
+
+Render Free web services can sleep when idle and have limited CPU and memory. For an unexpected `SIGTERM`, check the Render Events and Metrics tabs at the same timestamp to distinguish a deploy or restart from resource pressure. Continuous voice playback and `/247` require a host that stays awake.
 
 #### Run BauaaCore with a separate audio node
 
 Set the environment variables in the Render web service settings. Use `npm ci` for the build command and `npm start` for the start command. Render provides `PORT`.
 
-To enable the YouTube audio resolver on the Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. Use Node.js 22 or newer and redeploy the bot. Lavalink can then fetch YouTube audio through the bot when the YouTube stream URL is bound to the bot's IP.
+To enable the YouTube audio resolver on a separate Render bot service, use `npm ci && bash scripts/install-yt-dlp.sh` as its build command. Set `MUSIC_YTDLP_PATH=./.tools/yt-dlp` and set `MUSIC_MEDIA_BASE_URL` to the bot service's public HTTPS origin. The resolver needs Node.js 22 or newer and Python 3.11 or newer for the official Unix yt-dlp executable. Lavalink can then fetch cached YouTube audio through the bot when the stream URL is bound to the bot's IP.
 
 #### Run music on your PC and general commands on Render
 
-Set `BAUAA_INSTANCE_ROLE=general` in Render's environment and `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. With this setup the Render Docker service starts the bot without Lavalink. The general instance registers the full slash command list, and the music instance handles music commands and player buttons. Start the PC instance with `npm.cmd start` and check for the `general` role on Render and the `music` role in the PC's startup banner.
+Set `BAUAA_INSTANCE_ROLE=general` in Render's environment and `BAUAA_INSTANCE_ROLE=music` in the PC's `.env`. With this setup the Render Docker service starts the bot without Lavalink. The general instance registers the full slash command list, and the music instance handles music commands and player buttons. Music interactions require the music instance to be running. Start the PC instance with `npm.cmd start` and check for the `general` role on Render and the `music` role in the PC's startup banner.
 
 Point your external uptime monitor at `/ready` to get a failure status when Discord is disconnected or MongoDB is unavailable. `/health` reports HTTP process liveness.
 

@@ -1,4 +1,4 @@
-const { SlashCommandBuilder } = require("discord.js");
+const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 
 const {
     resetConversation,
@@ -18,15 +18,15 @@ module.exports = {
             });
         }
 
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const { guildId, user } = interaction;
         const cancelled = cancelActiveRequest(guildId, user.id);
         const wasReset = resetConversation(guildId, user.id);
 
-        return interaction.reply({
+        return interaction.editReply({
             content: wasReset || cancelled
                 ? "Your Zoya chat was reset. The default language is Hinglish."
                 : "You don't have an active Zoya chat to reset.",
-            ephemeral: true,
         });
     },
 };
