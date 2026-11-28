@@ -134,20 +134,29 @@ function recordingTitle({ title, author }) {
     return name;
 }
 
+const artistSeparator = /\s+(?:x|×|&|and|feat\.?)\s+|,\s*/i;
+
 async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute } = {}) {
     const { info } = track;
     if (!info.title || !info.author || !(info.duration > 0) || info.isStream) return null;
     const title = recordingTitle(info);
     if (!title) return null;
-    const reference = { ...info, title };
-    const artist = normalized(info.author);
+    // Label channels can put the performers after the title and channel name.
+    const titleParts = info.title.split("|").map(part => part.trim());
+    const credit = titleParts.slice(1, -1).some(part => normalized(part) === normalized(info.author))
+        ? titleParts.at(-1).split(artistSeparator).filter(Boolean) : [];
+    const performers = credit.length > 1 ? credit : [];
+    const reference = { ...info, title, author: performers.join(", ") || info.author };
+    const artists = [info.author, ...performers].map(normalized);
+    const labels = [...artists, normalized(performers.join(" x ")), normalized(performers.join(" "))].filter(Boolean);
     function sameRecording(alternate) {
         const difference = Math.abs(alternate.duration - info.duration);
         const credited = normalized(alternate.title);
-        const sameArtist = normalized(alternate.author) === artist;
-        return alternate.duration > 0 && recordingTitle({ ...alternate, author: info.author }) === title &&
-            (sameArtist ? difference <= 25000 : difference <= 5000 &&
-                (credited === `${title} ${artist}` || credited === `${artist} ${title}`));
+        const alternateArtists = [alternate.author, ...String(alternate.author ?? "").split(artistSeparator)].map(normalized);
+        const sameArtist = alternateArtists.some(artist => artists.includes(artist));
+        const creditedTitle = labels.some(artist => credited === `${title} ${artist}` || credited === `${artist} ${title}`);
+        const matchingTitle = labels.some(author => recordingTitle({ ...alternate, author }) === title);
+        return alternate.duration > 0 && matchingTitle && (sameArtist ? difference <= 25_000 : difference <= 5_000 && creditedTitle);
     }
     const native = await matchTrack(node, reference, requester, candidate => {
         const { info: alternate } = candidate;
@@ -158,15 +167,15 @@ async function matchSoundCloudTrack(node, track, requester, { binary, resolve, e
 
     // Lavalink can reject an entire search when a result uses an unsupported SoundCloud format.
     const { stdout } = await exec(binary, [...ytDlpOptions, "--flat-playlist", "--dump-single-json", "--",
-        `scsearch6:${title} ${info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true });
+        `scsearch6:${title} ${performers.join(" ") || info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true });
     for (const entry of JSON.parse(stdout).entries ?? []) {
         const alternate = {
             title: entry?.title,
-            author: entry?.artists?.[0] || entry?.uploader,
+            author: entry?.artists?.join?.(" & ") || entry?.uploader,
             duration: Number(entry?.duration) * 1000,
         };
         if (!alternate.title || !alternate.author || streamProvider(entry.webpage_url) !== "soundcloud" ||
-            !sameRecording(alternate) || similarTrack({ info: alternate }, reference) < 6) continue;
+            !sameRecording(alternate)) continue;
         const playable = await resolve(entry.webpage_url);
         if (playable) return playable;
     }

@@ -98,15 +98,15 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         console.warn(`[Music] ${event}`, error?.code || error?.name || "failed");
     }
 
-    function isLocalNode(node) {
-        return !embedded && !node.options.secure && ["127.0.0.1", "localhost"].includes(node.options.host);
+    function isLoopbackNode(node) {
+        return !node.options.secure && ["127.0.0.1", "localhost"].includes(node.options.host);
     }
 
     async function providerTrack(node, url, requester, info) {
         const provider = streamProvider(url);
         try {
             const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info, media.loadHls,
-                { preferDirect: isLocalNode(node) });
+                { preferDirect: isLoopbackNode(node) });
             if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
@@ -358,7 +358,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         const prepare = trackPreparers.get(next);
         const node = player.node;
         if (!prepare || !player.queue.current || playerFor(player.guildId) !== player ||
-            !isLocalNode(node) || prefetchingNodes.has(node)) return;
+            embedded || !isLoopbackNode(node) || prefetchingNodes.has(node)) return;
         prefetchingNodes.add(node);
         void prepare(node).catch(error => warn("queue preparation", error)).finally(() => {
             prefetchingNodes.delete(node);
@@ -521,7 +521,11 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         await refresh(player, announce);
     }
 
-    async function reportTrackError(player, track) {
+    async function reportTrackError(player, track, failure) {
+        const details = failure?.type === "TrackStuckEvent"
+            ? `No audio frames for ${failure.thresholdMs} ms.`
+            : failure?.exception?.message || failure?.message;
+        log("WARNING", "Music", `Playback failed (${track?.info?.sourceName || "unknown source"}).`, details, failure?.exception?.cause);
         const last = player.getData("errorNotice") || 0;
         if (Date.now() - last < 10000) return;
         player.setData("errorNotice", Date.now());
@@ -632,8 +636,12 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
                 .catch(error => warn("SponsorBlock seek", error)).finally(() => { active.seeking = false; });
         });
         manager.on("queueEnd", player => { void sync(player, false).catch(error => warn("queue end", error)); });
-        manager.on("trackError", (player, track, cause) => { void reportTrackError(player, track || cause?.track).catch(error => warn("track error", error)); });
-        manager.on("trackStuck", (player, track) => { void reportTrackError(player, track).catch(error => warn("track stuck", error)); });
+        manager.on("trackError", (player, track, cause) => {
+            void reportTrackError(player, track || cause?.track, cause).catch(error => warn("track error", error));
+        });
+        manager.on("trackStuck", (player, track, cause) => {
+            void reportTrackError(player, track, cause).catch(error => warn("track stuck", error));
+        });
         manager.on("playerMove", player => { void sync(player, false).catch(error => warn("voice move", error)); });
         manager.on("playerDestroy", player => {
             clearTimeout(player.getData("idle"));

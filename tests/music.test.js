@@ -297,6 +297,34 @@ test("SoundCloud fallback searches independently and converts a full HLS match w
     assert.equal(ready.info.uri, url);
 });
 
+test("SoundCloud fallback uses the performers credited in a label-channel upload", async () => {
+    const video = { info: {
+        title: "Jhol | Coke Studio Pakistan | Season 15 | Maanu x Annural Khalid",
+        author: "Coke Studio Pakistan", duration: 279_000,
+    } };
+    const originalUrl = "https://soundcloud.com/performers/original";
+    const original = { encoded: "original" };
+    const result = await matchSoundCloudTrack({ async search() {
+        return { loadType: "error", tracks: [] };
+    } }, video, { id: userId }, {
+        binary: "yt-dlp",
+        async exec(_, args) {
+            assert.equal(args.at(-1), "scsearch6:jhol Maanu Annural Khalid");
+            return { stdout: JSON.stringify({ entries: [
+                { title: "Jhol", uploader: "Different Artist", duration: 278, webpage_url: "https://soundcloud.com/other/song" },
+                { title: "Jhol (Slowed + Reverb)", artists: ["Maanu", "Annural Khalid"], duration: 279,
+                    webpage_url: "https://soundcloud.com/other/remix" },
+                { title: "Jhol", artists: ["Maanu", "Annural Khalid"], duration: 265, webpage_url: originalUrl },
+            ] }) };
+        },
+        async resolve(url) {
+            assert.equal(url, originalUrl);
+            return original;
+        },
+    });
+    assert.equal(result, original);
+});
+
 function rawTrack(id, title) {
     return { encoded: `encoded-${id}`, info: { identifier: id, title, author: "Artist", length: 90000, isSeekable: true,
         isStream: false, sourceName: "youtube", uri: `https://www.youtube.com/watch?v=${id}` }, pluginInfo: {}, userData: {} };
