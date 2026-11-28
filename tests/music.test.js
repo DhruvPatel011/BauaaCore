@@ -7,6 +7,7 @@ const { setTimeout: delay } = require("node:timers/promises");
 const { ChannelType, Collection, MessageFlags, PermissionsBitField } = require("discord.js");
 const { WebSocketServer } = createRequire(require.resolve("lavalink-client"))("ws");
 const { installMusic, definitions, slashData } = require("../src/music/commands");
+const { playInput } = require("../src/music/playback");
 const { library, defaultSettings } = require("../src/music/library");
 const { createMediaCache } = require("../src/music/media");
 const { audioStage, loadTracks } = require("../src/music/audioDeadline");
@@ -508,6 +509,8 @@ test("music controls update one public panel without routine replies and preserv
         info: { ...tracks[0].info, identifier: "soundcloud-first", sourceName: "soundcloud", uri: "https://soundcloud.com/artist/first-song" } };
     const secondAlternate = { ...rawTrack("soundcloud-second", "Second song"),
         info: { ...tracks[1].info, identifier: "soundcloud-second", sourceName: "soundcloud", uri: "https://soundcloud.com/artist/second-song" } };
+    const extracted = { ...rawTrack("http-alternate", "First song"),
+        info: { ...tracks[0].info, identifier: "http-alternate", sourceName: "http", uri: "https://media.sndcdn.com/audio.mp3" } };
     const soundCloudSearches = [];
     const sent = [];
     const voiceUpdates = [];
@@ -517,6 +520,7 @@ test("music controls update one public panel without routine replies and preserv
     let paused = false;
     let volume = 70;
     let failYouTube = false;
+    let stallYouTube = false;
     let allowProgress = true;
     let session = "lavalink-session";
     const resumeHeaders = [];
@@ -549,6 +553,7 @@ test("music controls update one public panel without routine replies and preserv
             }
             if (identifier === tracks[0].info.uri) return res.end(JSON.stringify({ loadType: "track", data: tracks[0] }));
             if (identifier === alternate.info.uri) return res.end(JSON.stringify({ loadType: "track", data: alternate }));
+            if (identifier === extracted.info.uri) return res.end(JSON.stringify({ loadType: "track", data: extracted }));
             return res.end(JSON.stringify({ loadType: "playlist", data: { info: { name: "Test playlist", selectedTrack: -1 }, tracks } }));
         }
         if (req.method === "DELETE") { res.statusCode = 204; return res.end(); }
@@ -561,7 +566,7 @@ test("music controls update one public panel without routine replies and preserv
         if (payload.track) {
             if (!payload.track.encoded) end("stopped");
             else {
-                const raw = [...tracks, alternate, secondAlternate].find(item => item.encoded === payload.track.encoded);
+                const raw = [...tracks, alternate, secondAlternate, extracted].find(item => item.encoded === payload.track.encoded);
                 current = { ...raw, userData: payload.track.userData };
                 sent.push(current.info.title);
                 send({ op: "event", type: "TrackStartEvent", guildId, track: current });
@@ -569,7 +574,7 @@ test("music controls update one public panel without routine replies and preserv
                     send({ op: "event", type: "TrackExceptionEvent", guildId, track: current,
                         exception: { message: "Simulated provider failure", severity: "common", cause: "remote returned 403" } });
                     end("loadFailed");
-                } else if (allowProgress) progress();
+                } else if (allowProgress && !(stallYouTube && current.info.sourceName === "youtube")) progress();
             }
         }
         res.end(JSON.stringify({ guildId, track: current, volume, paused, state: { time: Date.now(), position: 0, connected: true, ping: 1 } }));
@@ -757,4 +762,60 @@ test("music controls update one public panel without routine replies and preserv
     await music.commands.find(item => item.data.name === "play").execute(soundCloudLink);
     assert.equal(soundCloudLink.deleted, true);
     assert.equal(music.playerFor(guildId).queue.current?.info.sourceName, "soundcloud");
+
+    await t.test("hosted play prepares the match before a native stall and reports a late failure only once", async t => {
+        await music.close();
+        const calls = [];
+        let blockSearch = false;
+        let canceled = false;
+        const hosted = installMusic(client, {
+            data: { settings: async () => settings }, env: { ...env, BAUAA_EMBEDDED_LAVALINK: "1" },
+            async extractExec(_, args, { signal }) {
+                const query = args.at(-1);
+                calls.push(query);
+                if (query === "scsearch4:First song") {
+                    if (blockSearch) await new Promise((_, reject) => {
+                        signal.addEventListener("abort", () => { canceled = true; reject(signal.reason); }, { once: true });
+                    });
+                    return { stdout: JSON.stringify({ entries: [{ id: "1234", title: "First song", uploader: "Artist",
+                        duration: 90, webpage_url: alternate.info.uri }] }) };
+                }
+                assert.equal(query, "https://api.soundcloud.com/tracks/1234");
+                return { stdout: JSON.stringify({ id: "1234", title: "First song", author: "Artist", duration: 90,
+                    url: extracted.info.uri, protocol: "https" }) };
+            },
+        });
+        t.after(() => hosted.close());
+        await hosted.start();
+        await waitFor(() => hosted.audioStatus() === "connected");
+        stallYouTube = true;
+        const start = sent.length;
+        const publicSearches = soundCloudSearches.length;
+        const song = interaction({ query: "First song" });
+        const play = hosted.commands.find(item => item.data.name === "play").execute(song);
+        await waitFor(() => sent.length === start + 1 && calls.length === 2);
+        assert.equal(song.deleted, undefined);
+        assert.equal(current.info.sourceName, "youtube");
+        send({ op: "event", type: "TrackStuckEvent", guildId, track: current, thresholdMs: 8000 });
+        await play;
+        assert.equal(song.deleted, true);
+        assert.equal(hosted.playerFor(guildId).queue.current.info.sourceName, "soundcloud");
+        assert.deepEqual(calls, ["scsearch4:First song", "https://api.soundcloud.com/tracks/1234"]);
+        assert.equal(soundCloudSearches.length, publicSearches);
+
+        end();
+        await waitFor(() => !hosted.playerFor(guildId)?.queue.current);
+        blockSearch = true;
+        const deadline = new AbortController();
+        const timing = { ...hosted, playbackDeadline: fn => fn(deadline.signal) };
+        const failed = playInput(timing, interaction({}), "play", { query: "First song" });
+        const failure = assert.rejects(failed, /Playback did not start in time/);
+        await waitFor(() => current?.info.sourceName === "youtube" && calls.length === 3);
+        send({ op: "event", type: "TrackStuckEvent", guildId, track: current, thresholdMs: 8000 });
+        await waitFor(() => hosted.playerFor(guildId)?.getData("audioTransition"));
+        deadline.abort(new DOMException("Timed out", "TimeoutError"));
+        await failure;
+        await waitFor(() => canceled);
+        assert.equal(cards.filter(card => card.payload.content?.includes("play **")).length, 0);
+    });
 });
