@@ -1,6 +1,6 @@
 const { spawn, spawnSync } = require("node:child_process");
-const { existsSync, readFileSync } = require("node:fs");
-const { join } = require("node:path");
+const { existsSync, mkdirSync, readFileSync } = require("node:fs");
+const { delimiter, join } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 
 const javaEnv = { ...process.env };
@@ -37,6 +37,12 @@ async function stopStartup(signal) {
 
 function runBot() {
     if (stopping) return;
+    if (process.platform === "win32") {
+        const portableBin = join(process.cwd(), ".tools", "ffmpeg", "bin");
+        if (existsSync(join(portableBin, "ffmpeg.exe"))) {
+            process.env.PATH = [process.env.PATH, portableBin].filter(Boolean).join(delimiter);
+        }
+    }
     handingOff = true;
     const bot = require("../src/index");
     if (java) bot.setLocalLavalinkCleanup(stopJava);
@@ -121,6 +127,12 @@ async function start() {
             .map(line => line.trim().split(/\s+/)[1]);
         const bundledPlugins = pluginFiles.every(file => file && existsSync(join(cwd, "plugins", file)));
         const args = ["-jar", "Lavalink.jar", "--debug=false"];
+        if (process.platform === "win32") {
+            // Undertow needs a writable temp directory when the Windows user temp folder is restricted.
+            const tempDir = join(cwd, "logs", "tmp");
+            mkdirSync(tempDir, { recursive: true });
+            args.unshift(`-Djava.io.tmpdir=${tempDir}`);
+        }
         if (bundledPlugins) {
             // Use the existing preloaded-plugin profile to skip Maven update checks.
             args.push("--spring.profiles.active=render");
