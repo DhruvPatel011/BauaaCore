@@ -10,6 +10,7 @@ require("dotenv").config({ quiet: true });
 const { getInstanceRole, handlesCommand } = require("../src/utils/instanceRole");
 const { terminal } = require("../src/utils/terminal");
 const { bridgeConsole, captureLavalink, log, safeText } = require("../src/utils/runtimeLog");
+const { probeLavalink } = require("../src/music/nodeReadiness");
 
 let java;
 let javaClosed;
@@ -59,13 +60,8 @@ function javaExecutable() {
 }
 
 async function lavalinkReady(url, password) {
-    const response = await fetch(new URL("/v4/info", url), {
-        headers: { Authorization: password },
-        redirect: "error",
-        signal: AbortSignal.timeout(1000),
-    }).catch(() => null);
+    const response = await probeLavalink(url, password);
     if (!response) return false;
-    await response.body?.cancel();
     if (response.status === 401 || response.status === 403) {
         throw new Error("LAVALINK_PASSWORD does not match the running local Lavalink server.");
     }

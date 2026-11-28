@@ -310,6 +310,60 @@ async function waitFor(predicate) {
     assert.fail("Timed out waiting for a music event");
 }
 
+test("the embedded audio node waits for authenticated HTTP readiness while its backup connects", { timeout: 10_000 }, async t => {
+    let primaryReady = false;
+    let primaryProbes = 0;
+    const upgrades = [];
+    const connected = [];
+    const server = http.createServer((req, res) => {
+        if (req.method === "DELETE") return res.writeHead(204).end();
+        if (new URL(req.url, "http://localhost").pathname !== "/v4/info") return res.writeHead(404).end();
+        const password = req.headers.authorization;
+        if (password === "test-primary") {
+            primaryProbes++;
+            if (!primaryReady) return res.writeHead(503).end();
+        } else if (password !== "test-backup") {
+            return res.writeHead(401).end();
+        }
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ version: { semver: "4.2.2" }, sourceManagers: [], plugins: [] }));
+    });
+    const socket = new WebSocketServer({ server });
+    socket.on("connection", (ws, req) => {
+        const password = req.headers.authorization;
+        upgrades.push(password);
+        ws.send(JSON.stringify({ op: "ready", resumed: false, sessionId: `session-${password}` }));
+    });
+    t.after(() => {
+        for (const ws of socket.clients) ws.terminate();
+        socket.close();
+        server.close();
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const client = new EventEmitter();
+    client.user = { id: botId };
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const music = installMusic(client, {
+        env: {
+            BAUAA_EMBEDDED_LAVALINK: "1",
+            LAVALINK_URL: origin, LAVALINK_PASSWORD: "test-primary",
+            LAVALINK_URL_BACKUP: origin, LAVALINK_PASSWORD_BACKUP: "test-backup",
+        },
+        onNodeReady: id => connected.push(id),
+    });
+    t.after(() => music.close());
+
+    const startup = music.start();
+    await waitFor(() => primaryProbes > 0 && connected.includes("backup"));
+    assert.deepEqual(upgrades, ["test-backup"]);
+    primaryReady = true;
+    await startup;
+    await waitFor(() => connected.includes("primary"));
+    assert.deepEqual(upgrades, ["test-backup", "test-primary"]);
+});
+
 test("music controls update one public panel without routine replies and preserve private results and errors", { timeout: 15000 }, async t => {
     const tracks = [rawTrack("first-track", "First song"), rawTrack("secondtrack", "Second song")];
     const alternate = { ...rawTrack("soundcloud-first", "First song"),

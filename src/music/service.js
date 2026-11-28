@@ -6,6 +6,7 @@ const { sanitizeSingleLine } = require("../ai/contentFilters");
 const { log } = require("../utils/runtimeLog");
 const { library } = require("./library");
 const { createMediaCache } = require("./media");
+const { probeLavalink } = require("./nodeReadiness");
 const { customHosts, matchTrack, matchSoundCloudTrack, searchTracks, storeTrack, streamProvider, directProviderTrack } = require("./sources");
 const { MusicError, TRACK_LIMIT, noMentions, trackTitle, ytDlpErrorDetail } = require("./shared");
 const { playerPanel, disconnectedPanel } = require("./panel");
@@ -61,6 +62,8 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         log("ERROR", "Audio Node", "Configuration error.", error);
         nodes = [];
     }
+    const embeddedPrimary = embedded ? nodes.find(node => node.id === "primary") : undefined;
+    const startup = embeddedPrimary ? new AbortController() : null;
     const mediaHosts = customHosts(env);
     const extractor = env.MUSIC_YTDLP_PATH?.trim();
     const media = createMediaCache(env.MUSIC_MEDIA_BASE_URL);
@@ -75,7 +78,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
     const trackPreparers = new WeakMap();
     const prefetchingNodes = new WeakSet();
     const manager = nodes.length ? new LavalinkManager({
-        nodes,
+        nodes: nodes.filter(node => node !== embeddedPrimary),
         sendToShard: (guildId, packet) => client.guilds.cache.get(guildId)?.shard.send(packet),
         autoSkip: true,
         autoSkipOnResolveError: true,
@@ -132,6 +135,36 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             return "connected";
         }
         return embedded && !audioConnected && Date.now() < startupDeadline ? "starting" : "offline";
+    }
+
+    async function start() {
+        if (!manager) return;
+        const identity = { id: client.user.id, username: "BauaaCore/1.0.0" };
+        if (!embeddedPrimary) return manager.init(identity);
+
+        // An external backup can connect while the embedded JVM is starting.
+        if (manager.nodeManager.nodes.size) await manager.init(identity);
+        const { signal } = startup;
+        const { host, port, secure, authorization } = embeddedPrimary;
+        const origin = `${secure ? "https" : "http"}://${host}:${port}`;
+        let ready = false;
+        while (!signal.aborted && Date.now() < startupDeadline) {
+            const response = await probeLavalink(origin, authorization, AbortSignal.any([signal, AbortSignal.timeout(2_000)]));
+            if (response?.status === 401 || response?.status === 403) {
+                throw new Error("Embedded Lavalink rejected its password. Check the Render Lavalink logs.");
+            }
+            if (response?.ok) {
+                ready = true;
+                break;
+            }
+            await delay(2_000, undefined, { signal }).catch(() => {});
+        }
+        if (signal.aborted) return;
+        if (!ready) log("WARNING", "Audio Node", "Embedded Lavalink did not become ready in 3 minutes. Connection retries will continue. Check the Render Lavalink logs.");
+
+        const node = manager.nodeManager.createNode(embeddedPrimary);
+        if (manager.initiated) node.connect();
+        else await manager.init(identity);
     }
 
     function nodeFor(guildId) {
@@ -626,8 +659,11 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         serialize: (id, fn) => serial(controls, id, fn),
         voiceChannel: player => client.channels.cache.get(player.voiceChannelId),
         handleMedia: media.handleHttp,
-        start: () => manager?.init({ id: client.user.id, username: "BauaaCore/1.0.0" }),
-        close: () => manager?.nodeManager.disconnectAll(true, true),
+        start,
+        close: () => {
+            startup?.abort();
+            if (manager?.nodeManager.nodes.size) return manager.nodeManager.disconnectAll(true, true);
+        },
     };
 }
 
