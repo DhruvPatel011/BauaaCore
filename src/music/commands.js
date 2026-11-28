@@ -196,6 +196,8 @@ function display(result) {
 function installMusic(client, deps) {
     const music = createMusic(client, deps);
     const accounts = createAccounts(music, deps?.env);
+    const hosted = (deps?.env || process.env).BAUAA_EMBEDDED_LAVALINK === "1";
+    const pendingPlays = new Set();
 
     async function run(interaction, command, options) {
         if (["play", "playfile", "search"].includes(command)) return playInput(music, interaction, command, options);
@@ -246,12 +248,31 @@ function installMusic(client, deps) {
         return "The music command failed. Try again or check `/debug`.";
     }
 
+    async function runSlash(interaction, command, options) {
+        const execute = () => music.serialize(interaction.guildId, () => run(interaction, command, options));
+        if (!hosted || command !== "play") return execute();
+        const request = JSON.stringify([interaction.guildId, interaction.user.id, options.query?.trim().toLowerCase()]);
+        if (pendingPlays.has(request)) throw new MusicError("I’m already checking that song for you.");
+        pendingPlays.add(request);
+        let progress;
+        const timer = setTimeout(() => {
+            progress = interaction.editReply(display("Checking audio sources for your track…")).catch(() => {});
+        }, 3000);
+        try {
+            return await execute();
+        } finally {
+            clearTimeout(timer);
+            pendingPlays.delete(request);
+            await progress;
+        }
+    }
+
     const commands = definitions.map(item => ({ data: slashData(item), async execute(interaction) {
         if (!interaction.inGuild()) return interaction.reply({ content: "Run this command in a server.", flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             const options = slashOptions(interaction, item);
-            const result = await music.serialize(interaction.guildId, () => run(interaction, item.name, options));
+            const result = await runSlash(interaction, item.name, options);
             if (showSuccess(item.name, options, result)) await interaction.editReply(display(result));
             else await interaction.deleteReply().catch(() => {});
         } catch (error) {

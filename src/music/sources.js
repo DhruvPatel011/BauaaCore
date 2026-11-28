@@ -112,12 +112,14 @@ function similarTrack(track, reference) {
     return titleMatch + authorMatch + (gap > 25000 ? -5 : gap > 5000 ? -2 : 1) - (track.info.isStream ? 6 : 0);
 }
 
-async function matchTrack(node, reference, requester, resolve = track => track, sources = searchSources) {
+async function matchTrack(node, reference, requester, resolve = track => track, sources = searchSources, signal) {
     for (const source of sources) {
+        signal?.throwIfAborted();
         const results = await node.search({ query: `${reference.title} ${reference.author}`, source }, requester).catch(() => null);
         const ranked = (results?.tracks || []).map(track => ({ track, score: similarTrack(track, reference) }))
             .sort((left, right) => right.score - left.score);
         for (const { track, score } of ranked.slice(0, 3)) {
+            signal?.throwIfAborted();
             if (score < 6) break;
             const playable = await resolve(track);
             if (playable) return playable;
@@ -136,7 +138,7 @@ function recordingTitle({ title, author }) {
 
 const artistSeparator = /\s+(?:x|×|&|and|feat\.?)\s+|,\s*/i;
 
-async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute } = {}) {
+async function matchSoundCloudTrack(node, track, requester, { binary, resolve, exec = execute, signal } = {}) {
     const { info } = track;
     if (!info.title || !info.author || !(info.duration > 0) || info.isStream) return null;
     const title = recordingTitle(info);
@@ -162,13 +164,15 @@ async function matchSoundCloudTrack(node, track, requester, { binary, resolve, e
         const { info: alternate } = candidate;
         if (candidate.encoded && alternate.sourceName === "soundcloud" && !alternate.isStream && sameRecording(alternate)) return candidate;
         return null;
-    }, ["scsearch"]);
+    }, ["scsearch"], signal);
     if (native || !binary || !resolve) return native;
 
     // Lavalink can reject an entire search when a result uses an unsupported SoundCloud format.
+    signal?.throwIfAborted();
     const { stdout } = await exec(binary, [...ytDlpOptions, "--flat-playlist", "--dump-single-json", "--",
-        `scsearch6:${title} ${performers.join(" ") || info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true });
+        `scsearch6:${title} ${performers.join(" ") || info.author}`], { timeout: 15000, maxBuffer: 512 * 1024, windowsHide: true, signal });
     for (const entry of JSON.parse(stdout).entries ?? []) {
+        signal?.throwIfAborted();
         const alternate = {
             title: entry?.title,
             author: entry?.artists?.join?.(" & ") || entry?.uploader,
@@ -204,7 +208,8 @@ function resolvedProviderTrack(track, input, provider, info) {
     return track;
 }
 
-async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls, { preferDirect = false } = {}) {
+async function directProviderTrack(node, input, requester, binary, exec = execute, fallback, knownInfo, loadHls, { preferDirect = false, signal } = {}) {
+    signal?.throwIfAborted();
     const provider = binary && streamProvider(input);
     if (!provider) return null;
     const useKnownInfo = provider === "youtube" && knownInfo?.sourceName === "youtube" && knownInfo.uri === input && !knownInfo.isStream;
@@ -223,7 +228,8 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         : "bestaudio[protocol=https]/best[protocol=https]";
     const { stdout } = await exec(binary, [...ytDlpOptions, "-q", "-f", format, "--print",
         '{"url":%(url)j,"title":%(title)j,"id":%(id)j,"duration":%(duration)j,"author":%(uploader)j,"artwork":%(thumbnail)j,"protocol":%(protocol)j}',
-        "--", input], { timeout: 40000, maxBuffer: 65536, windowsHide: true });
+        "--", input], { timeout: 40000, maxBuffer: 65536, windowsHide: true, signal });
+    signal?.throwIfAborted();
     const metadata = JSON.parse(stdout.trim());
     const resource = new URL(metadata.url);
     const mediaDomains = provider === "youtube" ? ["googlevideo.com"] : ["sndcdn.com", "playback.media-streaming.soundcloud.cloud"];
@@ -236,9 +242,10 @@ async function directProviderTrack(node, input, requester, binary, exec = execut
         return resolvedProviderTrack(await loadHls?.(node, resource.href, requester), input, provider, info);
     }
     // A separate Lavalink host may be unable to open a YouTube URL bound to the bot's IP.
-    const loadCached = () => fallback?.(node, input, requester, binary).catch(() => null);
+    const loadCached = () => signal?.aborted ? null : fallback?.(node, input, requester, binary).catch(() => null);
     let track = provider === "youtube" && !preferDirect && !useKnownInfo && !knownInfo?.isStream ? await loadCached() : null;
     if (!track) {
+        signal?.throwIfAborted();
         const result = await node.search({ query: resource.href }, requester).catch(() => null);
         track = result?.tracks?.[0];
     }

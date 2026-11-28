@@ -102,16 +102,36 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         return !node.options.secure && ["127.0.0.1", "localhost"].includes(node.options.host);
     }
 
-    async function providerTrack(node, url, requester, info) {
+    async function providerTrack(node, url, requester, info, signal) {
         const provider = streamProvider(url);
         try {
-            const track = await directProviderTrack(node, url, requester, extractor, undefined, media.load, info, media.loadHls,
-                { preferDirect: isLoopbackNode(node) });
-            if (!track) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
+            const track = await directProviderTrack(node, url, requester, extractor, undefined,
+                (...args) => media.load(...args, signal), info, (...args) => media.loadHls(...args, signal),
+                { preferDirect: isLoopbackNode(node), signal });
+            if (!track && !signal?.aborted) console.warn(`[Music] yt-dlp ${provider}: Lavalink could not load the resolved audio`);
             return track;
         } catch (error) {
-            warn(`yt-dlp ${provider}: ${ytDlpErrorDetail(error)}`, error);
+            if (!signal?.aborted) warn(`yt-dlp ${provider}: ${ytDlpErrorDetail(error)}`, error);
             return null;
+        }
+    }
+
+    async function prepareAudio(resolve) {
+        if (!embedded) return resolve();
+        const controller = new AbortController();
+        const { signal } = controller;
+        let timer;
+        const timeout = new Promise(finish => {
+            timer = setTimeout(() => {
+                log("WARNING", "Music", "Audio sources did not return a playable track within 30 seconds.");
+                finish(null);
+            }, 30_000);
+        });
+        try {
+            return await Promise.race([resolve(signal), timeout]);
+        } finally {
+            clearTimeout(timer);
+            controller.abort();
         }
     }
 
@@ -277,7 +297,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         } catch (error) {
             if (!extractor || !streamProvider(query)) throw error;
         }
-        const track = await providerTrack(node, query, requester);
+        const track = await prepareAudio(signal => providerTrack(node, query, requester, undefined, signal));
         if (!track) throw new MusicError("No playable audio found for that link. Try another track or `/playfile`.");
         return { tracks: [track] };
     }
@@ -287,31 +307,36 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
         const track = manager.utils.buildUnresolvedTrack({ info: { ...reference,
             sourceName: reference.source, isSeekable: true } }, requester);
         track.userData = { musicReference: reference };
-        async function findPlayable(node) {
+        async function findPlayable(node, signal) {
             let result = candidate;
             if (reference.kind === "match") {
                 result = await matchTrack(node, reference, requester, extractor ? candidate => {
                     if (!streamProvider(candidate.info.uri)) return candidate;
-                    return providerTrack(node, candidate.info.uri, requester, candidate.info);
-                } : undefined);
+                    return providerTrack(node, candidate.info.uri, requester, candidate.info, signal);
+                } : undefined, undefined, signal);
             } else {
                 const uri = result?.info.uri || reference.url;
                 if (extractor && streamProvider(uri)) {
-                    const playable = await providerTrack(node, uri, requester, result?.info);
+                    const playable = await providerTrack(node, uri, requester, result?.info, signal);
+                    signal?.throwIfAborted();
                     if (playable) result = playable;
                     else if (allowAlternateSource && result?.info.sourceName === "youtube" &&
                         node.info?.sourceManagers?.includes("soundcloud")) {
                         const alternate = await matchSoundCloudTrack(node, result, requester, {
                             binary: extractor,
-                            resolve: url => providerTrack(node, url, requester),
+                            resolve: url => providerTrack(node, url, requester, undefined, signal),
+                            signal,
                         }).catch(error => {
-                            warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
+                            if (!signal?.aborted) warn(`SoundCloud fallback: ${ytDlpErrorDetail(error)}`, error);
                             return null;
                         });
+                        signal?.throwIfAborted();
                         if (alternate) {
                             Object.assign(alternate.info, { title: result.info.title, author: result.info.author });
                             result = alternate;
                             log("DEBUG", "Music", "YouTube unavailable. Recovered with a SoundCloud match.");
+                        } else if (embedded) {
+                            log("INFO", "Music", "SoundCloud fallback returned no playable match.");
                         }
                     }
                 }
@@ -325,7 +350,7 @@ function createMusic(client, { env = process.env, data = library(), enabled = tr
             if (preparation?.node === node && preparation.expires > Date.now() && media.isAvailable(preparation.track)) {
                 return preparation.pending;
             }
-            const entry = { node, expires: Infinity, pending: findPlayable(node) };
+            const entry = { node, expires: Infinity, pending: prepareAudio(signal => findPlayable(node, signal)) };
             preparation = entry;
             void entry.pending.then(result => {
                 entry.track = result;

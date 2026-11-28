@@ -24,14 +24,14 @@ function createMediaCache(address, exec = execute) {
         }
     }
 
-    async function cacheAudio(node, requester, command, args, fixedExtension) {
-        if (!origin || busy >= 2) return null;
+    async function cacheAudio(node, requester, command, args, fixedExtension, signal) {
+        if (!origin || busy >= 2 || signal?.aborted) return null;
         busy++;
         try {
             const { stdout } = await exec(command, args, {
-                timeout: 45000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true,
+                timeout: 45000, encoding: "buffer", maxBuffer: maxTrackBytes, windowsHide: true, signal,
             });
-            if (!Buffer.isBuffer(stdout) || stdout.length < 1024) return null;
+            if (signal?.aborted || !Buffer.isBuffer(stdout) || stdout.length < 1024) return null;
             for (const [id, entry] of audio) if (entry.expires <= Date.now()) remove(id);
             while (bytes + stdout.length > maxCacheBytes && audio.size) remove(audio.keys().next().value);
             const id = randomBytes(18).toString("base64url");
@@ -40,7 +40,7 @@ function createMediaCache(address, exec = execute) {
             audio.set(id, { body: stdout, extension, type, expires: Date.now() + 7200000 });
             bytes += stdout.length;
             const result = await node.search({ query: `${origin}${mediaPrefix}${id}.${extension}` }, requester).catch(() => null);
-            const track = result?.tracks?.[0];
+            const track = signal?.aborted ? null : result?.tracks?.[0];
             if (track) cachedTracks.set(track, id);
             else remove(id);
             return track || null;
@@ -49,14 +49,14 @@ function createMediaCache(address, exec = execute) {
         }
     }
 
-    function load(node, input, requester, binary) {
-        return cacheAudio(node, requester, binary, [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input]);
+    function load(node, input, requester, binary, signal) {
+        return cacheAudio(node, requester, binary, [...ytDlpOptions, "--max-filesize", "16M", "-q", "-f", format, "-o", "-", "--", input], undefined, signal);
     }
 
-    function loadHls(node, input, requester) {
+    function loadHls(node, input, requester, signal) {
         return cacheAudio(node, requester, "ffmpeg", ["-nostdin", "-loglevel", "error", "-xerror", "-rw_timeout", "10000000",
             "-protocol_whitelist", "https,tls,tcp,crypto", "-i", input, "-map", "0:a:0", "-c:a", "libmp3lame",
-            "-b:a", "128k", "-f", "mp3", "pipe:1"], "mp3");
+            "-b:a", "128k", "-f", "mp3", "pipe:1"], "mp3", signal);
     }
 
     function remove(id) {

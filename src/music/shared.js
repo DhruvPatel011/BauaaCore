@@ -4,7 +4,7 @@ class MusicError extends Error {}
 
 const TRACK_LIMIT = 500;
 const noMentions = { parse: [], repliedUser: false };
-const ytDlpOptions = ["--ignore-config", "--no-warnings", "--js-runtimes", "node", "--no-playlist",
+const ytDlpOptions = ["--ignore-config", "--js-runtimes", "node", "--no-playlist",
     "--socket-timeout", "10", "--retries", "1", "--extractor-retries", "1"];
 
 function ytDlpErrorDetail(error) {

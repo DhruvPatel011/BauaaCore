@@ -26,6 +26,62 @@ test("all music commands serialize within Discord’s registration limits", () =
     for (const name of ["play", "playfile", "search", "playlist", "247", "8d", "spotify", "lastfm"]) assert.ok(names.has(name));
 });
 
+test("a pending hosted play shows progress and answers a repeat without waiting for the guild queue", async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let release;
+    const waiting = new Promise(resolve => { release = resolve; });
+    t.after(release);
+    let markStarted;
+    const started = new Promise(resolve => { markStarted = resolve; });
+    const music = installMusic(new EventEmitter(), {
+        env: { BAUAA_EMBEDDED_LAVALINK: "1" },
+        data: { async settings() {
+            markStarted();
+            await waiting;
+            return defaultSettings;
+        } },
+    });
+    const play = music.commands.find(item => item.data.name === "play");
+    const interaction = () => ({ guildId, inGuild: () => true, user: { id: userId },
+        guild: { id: guildId, members: { cache: new Map() }, voiceStates: { cache: new Map() } },
+        options: { getString: () => "Husn", getBoolean: () => false },
+        async deferReply() {}, async editReply(reply) { this.output = reply.content; },
+    });
+    const first = interaction();
+    const pending = play.execute(first);
+    await started;
+    t.mock.timers.tick(3000);
+    assert.match(first.output, /Checking audio sources/);
+    const repeat = interaction();
+    await play.execute(repeat);
+    assert.match(repeat.output, /already checking that song/);
+    release();
+    await pending;
+    assert.equal(first.output, "Join a voice channel first.");
+});
+
+test("hosted track preparation stops waiting at its deadline and skips further provider searches", { timeout: 2000 }, async t => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const music = installMusic(new EventEmitter(), { env: { BAUAA_EMBEDDED_LAVALINK: "1", LAVALINK_PASSWORD: "test-password" } });
+    let finishSearch;
+    const search = new Promise(resolve => { finishSearch = resolve; });
+    const sources = [];
+    const node = { async search({ source }) {
+        sources.push(source);
+        return search;
+    } };
+    const track = music.unresolved({ kind: "match", title: "Husn", author: "Anuv Jain", source: "spotify" }, userId);
+    const player = { node, queue: { current: track } };
+    const pending = track.resolve(player);
+    t.mock.timers.tick(30_000);
+    await assert.rejects(pending, /No playable match/);
+    assert.equal(player.queue.current, null);
+
+    finishSearch({ tracks: [] });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sources, ["ytsearch"]);
+});
+
 test("music help opens the listening guide from slash and prefix commands", async () => {
     const music = installMusic(new EventEmitter(), { env: {}, data: { settings: async () => ({ ...defaultSettings, prefix: "!" }) } });
     const interaction = {
